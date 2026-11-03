@@ -125,6 +125,14 @@ def test_keycap_commits_to_ascii_digit(repo):
     assert head(git, 'f') == b'1 x\n'
 
 
+def test_hook_format_drops_stranded_space(repo):
+    r, git = repo
+    (r / 'f').write_bytes(b'radiator \xf0\x9f\x94\xa5,\n')
+    git('add', 'f')
+    git('commit', '-qm', 'c')
+    assert head(git, 'f') == b'radiator,\n'
+
+
 def test_unwritable_file_rejected(repo):
     if os.geteuid() == 0:
         pytest.skip('root ignores permissions')
@@ -239,6 +247,11 @@ def test_stdin_fix_is_a_clean_filter(tmp_path):
     r = run_stdin(tmp_path, b'a' + EM + b'b\r\n\xff\n', '--fix', '-')
     assert r.stdout == b'ab\r\n\xff\n'
     assert b'SUMMARY' in r.stderr
+
+
+def test_stdin_fix_format(tmp_path):
+    r = run_stdin(tmp_path, b'word ' + EM + b', end\n', '--fix', '--format', '-')
+    assert r.stdout == b'word, end\n'
 
 
 def test_dev_null_stdin_still_scans_directory(tmp_path):

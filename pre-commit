@@ -112,7 +112,7 @@ while IFS= read -r file; do
         reject "this is a 'git commit <path>' commit"
     fi
 
-    "$PYTHON_BIN" "$SCRIPT_PATH" -q --fix -- "./$file"
+    "$PYTHON_BIN" "$SCRIPT_PATH" -q --fix --format -- "./$file"
     if ! "$PYTHON_BIN" "$SCRIPT_PATH" -q --exit-code -- "./$file" >/dev/null 2>&1; then
         reject "they could not be fixed automatically"
     fi

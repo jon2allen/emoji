@@ -154,6 +154,69 @@ def test_map_mode_unmapped_falls_back_to_strip():
         os.remove(path)
 
 
+def test_format_drops_space_stranded_before_punctuation():
+    source = "radiator \U0001F525, kingdom \U0001F451. hi \U0001F4A1! really \U0001F602?\n"
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
+        f.write(source)
+        path = f.name
+    try:
+        res = run_emoji("--fix", path)
+        assert res.returncode == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "radiator , kingdom . hi ! really ?\n"
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(source)
+        res = run_emoji("--fix", "--format", path)
+        assert res.returncode == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "radiator, kingdom. hi! really?\n"
+    finally:
+        os.remove(path)
+
+
+def test_format_leaves_original_punctuation_untouched():
+    source = "already , irregular . text\n"
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
+        f.write(source)
+        path = f.name
+    try:
+        res = run_emoji("--fix", "--format", path)
+        assert res.returncode == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == source
+    finally:
+        os.remove(path)
+
+
+def test_format_applies_to_map_mode():
+    source = "went out \u26a0\ufe0f, then \u274c it\n"
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
+        f.write(source)
+        path = f.name
+    try:
+        res = run_emoji("--fix", "--mode", "map", "--format", path)
+        assert res.returncode == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "went out [warning], then [no] it\n"
+    finally:
+        os.remove(path)
+
+
+def test_format_applies_to_space_mode():
+    source = "cat \U0001F431, dog \U0001F436.\n"
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
+        f.write(source)
+        path = f.name
+    try:
+        res = run_emoji("--fix", "--mode", "space", "--format", path)
+        assert res.returncode == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "cat, dog.\n"
+    finally:
+        os.remove(path)
+
+
 def test_zwj_cluster_removed_as_one_unit():
     family = "\U0001F468\u200d\U0001F469\u200d\U0001F467"
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:

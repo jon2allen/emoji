@@ -10,7 +10,7 @@ Compatible across **macOS**, **Linux** (bash/sh), and **FreeBSD** (sh/csh/tcsh).
 When installed, running `git commit` in **any** Git repository on your machine will:
 1. Identify all currently staged files (excluding deletions).
 2. Scan them with `detect_emoji.py`.
-3. If any emoji are staged, automatically remove them. Orphaned invisible components (variation selectors, zero-width joiners) are always deleted.
+3. If any emoji are staged, automatically remove them, dropping any space the removal strands in front of punctuation. Orphaned invisible components (variation selectors, zero-width joiners) are always deleted.
 4. Re-stage the cleaned files before completing the commit.
 
 The commit is **rejected** rather than auto-fixed when fixing could disturb your work: the file has unstaged edits, you ran `git commit <path>`, or the file cannot be written. Files with no staged emoji are never touched.
@@ -31,7 +31,7 @@ locale/**
 ---
 
 ## Directory Contents
-- **`detect_emoji.py`**: Standalone Python 3 scanner and cleaner (supports `-r`, `--fix`, `--mode strip|space|map`, `--dry-run`, `--backup`, `--json`, `--exit-code`, and `-q`; requires Python 3.7+).
+- **`detect_emoji.py`**: Standalone Python 3 scanner and cleaner (supports `-r`, `--fix`, `--mode strip|space|map`, `--format`, `--dry-run`, `--backup`, `--json`, `--exit-code`, and `-q`; requires Python 3.7+).
 - **`pre-commit`**: POSIX `/bin/sh` hook script placed in `~/.git_hooks/`.
 - **`setup.sh`**: Setup installer for macOS and Linux (`sh`/`bash`/`zsh`).
 - **`setup.csh`**: Setup installer for FreeBSD and `csh`/`tcsh` shells.
@@ -78,6 +78,16 @@ If a different global pre-commit hook already occupies `~/.git_hooks/pre-commit`
 | black rightwards arrow | `->` |
 
 The map lives at the top of `detect_emoji.py` and is easy to extend.
+
+### Format cleanup: `--format`
+Removing an emoji can leave the text irregular: a space that used to sit between a word and an emoji ends up stranded in front of the following punctuation. `--format` fixes what the cleanup itself caused:
+
+```
+radiator [fire emoji],   --fix                ->  radiator ,
+radiator [fire emoji],   --fix --format       ->  radiator,
+```
+
+It only touches deletions the cleaner just made, in every mode, and never rewrites punctuation that was already adjacent in the original. The global hook always cleans with `--format` so committed text stays tidy.
 
 ---
 

@@ -95,6 +95,10 @@ REPLACEMENT_MAP = {
 
 MODES = ('strip', 'space', 'map')
 
+# Punctuation that binds to the preceding word; --format drops a space a
+# removal strands in front of one of these
+LEFT_BINDING_PUNCTUATION = ',.;:!?)]}%'
+
 # File argument meaning stdin (a file really named '-' can be passed as ./-)
 STDIN_TARGET = '-'
 
@@ -208,7 +212,7 @@ def cluster_replacement(cluster: str, category: str, mode: str) -> str:
     return ''  # strip
 
 
-def replace_emoji_in_text(text: str, mode: str) -> tuple:
+def replace_emoji_in_text(text: str, mode: str, format_cleanup: bool = False) -> tuple:
     """Remove or replace emoji clusters in text.
     Returns (new_text, cluster_count).
     """
@@ -228,9 +232,14 @@ def replace_emoji_in_text(text: str, mode: str) -> tuple:
             out.append(replacement)
             prev = replacement[-1]
         else:
-            # Swallow a space a deletion would orphan: one of a pair around
-            # the cluster, or one at the very start of a line
-            if end < len(text) and text[end] == ' ' and prev in ('', '\n', ' '):
+            next_ch = text[end] if end < len(text) else ''
+            if format_cleanup and prev == ' ' and next_ch and next_ch in LEFT_BINDING_PUNCTUATION:
+                # A removal stranded a space in front of punctuation; drop it
+                out[-1] = out[-1][:-1]
+                prev = out[-1][-1] if out[-1] else ''
+            elif next_ch == ' ' and prev in ('', '\n', ' '):
+                # Swallow a space a deletion would orphan: one of a pair around
+                # the cluster, or one at the very start of a line
                 end += 1
         total += 1
         pos = end
@@ -238,7 +247,7 @@ def replace_emoji_in_text(text: str, mode: str) -> tuple:
     return ''.join(out), total
 
 
-def process_file(filepath: str, verbose: bool = True, fix: bool = False, dry_run: bool = False, backup: bool = False, mode: str = 'strip') -> tuple:
+def process_file(filepath: str, verbose: bool = True, fix: bool = False, dry_run: bool = False, backup: bool = False, mode: str = 'strip', format_cleanup: bool = False) -> tuple:
     """Scan and optionally clean emoji in a file.
     Returns (emoji_found, file_summary, replacements_made, is_excluded, file_error).
     """
@@ -292,7 +301,7 @@ def process_file(filepath: str, verbose: bool = True, fix: bool = False, dry_run
                 if verbose:
                     print(f"[SKIPPED FIX] Excluded self script from replacement: {filepath}")
             else:
-                new_content, count_to_replace = replace_emoji_in_text(content, mode)
+                new_content, count_to_replace = replace_emoji_in_text(content, mode, format_cleanup)
                 if count_to_replace > 0:
                     if dry_run:
                         replacements_made = count_to_replace
@@ -344,7 +353,7 @@ def stdin_has_data() -> bool:
     return stat.S_ISFIFO(mode) or stat.S_ISREG(mode)
 
 
-def process_stdin(output, verbose: bool = True, fix: bool = False, dry_run: bool = False, mode: str = 'strip') -> tuple:
+def process_stdin(output, verbose: bool = True, fix: bool = False, dry_run: bool = False, mode: str = 'strip', format_cleanup: bool = False) -> tuple:
     """Scan stdin; with fix (and not dry_run) write the cleaned text to output as a filter.
     Returns the same tuple as process_file.
     """
@@ -365,7 +374,7 @@ def process_stdin(output, verbose: bool = True, fix: bool = False, dry_run: bool
     if not fix:
         replacements_made = 0
     else:
-        new_content, replacements_made = replace_emoji_in_text(content, mode)
+        new_content, replacements_made = replace_emoji_in_text(content, mode, format_cleanup)
         if not dry_run:
             output.write(new_content.encode('utf-8', 'surrogateescape'))
             output.flush()
@@ -418,6 +427,7 @@ def main():
     parser.add_argument('--fix', action='store_true', help="Clean detected emoji (strip, or substitute via --mode space|map)")
     parser.add_argument('--mode', choices=MODES, default='strip', help="Cleaning mode: 'strip' deletes emoji clusters, 'space' substitutes a single blank, 'map' substitutes ASCII equivalents where the curated map has one (default: strip)")
     parser.add_argument('--dry-run', action='store_true', help='Simulate cleaning with --fix without altering files')
+    parser.add_argument('--format', action='store_true', help='With --fix, also fix format irregularities the cleanup causes (drops a space stranded before punctuation)')
     parser.add_argument('--backup', action='store_true', help='Create .bak backup files before modifying with --fix')
     parser.add_argument('--json', action='store_true', help='Output summary strictly as JSON to stdout')
     parser.add_argument('-q', '--quiet', action='store_true', help='Suppress per-file progress output')
@@ -451,7 +461,7 @@ def main():
             print(f"\nProcessing: {filepath}")
 
         if filepath == STDIN_TARGET:
-            result = process_stdin(filter_output, verbose=verbose and not args.fix, fix=args.fix, dry_run=args.dry_run, mode=args.mode)
+            result = process_stdin(filter_output, verbose=verbose and not args.fix, fix=args.fix, dry_run=args.dry_run, mode=args.mode, format_cleanup=args.format)
         else:
             result = process_file(
                 filepath,
@@ -460,6 +470,7 @@ def main():
                 dry_run=args.dry_run,
                 backup=args.backup,
                 mode=args.mode,
+                format_cleanup=args.format,
             )
         found, file_summary, replaced, is_excluded, file_error = result
 
@@ -498,6 +509,7 @@ def main():
             'total_detected': sum(d['count'] for d in overall_summary.values()),
             'fix_enabled': args.fix,
             'mode': args.mode,
+            'format_cleanup': args.format,
             'dry_run': args.dry_run,
             'replacements_made': total_replacements,
             'excluded_from_fix': list(set(excluded_files)),
