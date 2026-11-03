@@ -154,6 +154,20 @@ def test_map_mode_unmapped_falls_back_to_strip():
         os.remove(path)
 
 
+def test_detection_reports_each_line_once():
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
+        f.write(f"a {EMOJI} b \U0001F620\nclean\nlast {EMOJI}\n")
+        path = f.name
+    try:
+        res = run_emoji(path)
+        assert res.returncode == 0
+        assert res.stdout.count(":1:") == 1
+        assert ":3:" in res.stdout
+        assert ":2:" not in res.stdout
+    finally:
+        os.remove(path)
+
+
 def test_format_drops_space_stranded_before_punctuation():
     source = "radiator \U0001F525, kingdom \U0001F451. hi \U0001F4A1! really \U0001F602?\n"
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:

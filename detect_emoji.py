@@ -212,13 +212,12 @@ def find_emoji(text: str):
             i += 1
 
 
-def categorize_emoji(text: str) -> dict:
-    """Categorize and count emoji clusters found in text.
+def summarize_clusters(clusters) -> dict:
+    """Categorize and count emoji clusters.
     Returns a dict of category -> {count, char, unicode_format, unicode_escape}.
-    Does NOT modify the input text.
     """
     found = {}
-    for _start, _end, category, cluster in find_emoji(text):
+    for _start, _end, category, cluster in clusters:
         if category not in found:
             found[category] = {
                 'count': 0,
@@ -228,6 +227,13 @@ def categorize_emoji(text: str) -> dict:
             }
         found[category]['count'] += 1
     return found
+
+
+def categorize_emoji(text: str) -> dict:
+    """Categorize and count emoji clusters found in text.
+    Does NOT modify the input text.
+    """
+    return summarize_clusters(find_emoji(text))
 
 
 def cluster_replacement(cluster: str, category: str, mode: str) -> str:
@@ -245,15 +251,15 @@ def cluster_replacement(cluster: str, category: str, mode: str) -> str:
     return ''  # strip
 
 
-def replace_emoji_in_text(text: str, mode: str, format_cleanup: bool = False) -> tuple:
-    """Remove or replace emoji clusters in text.
+def apply_clusters(text: str, clusters, mode: str, format_cleanup: bool = False) -> tuple:
+    """Rewrite text given a precomputed cluster list (one pass, no rescanning).
     Returns (new_text, cluster_count).
     """
     out = []
     pos = 0
     total = 0
     prev = ''  # last emitted character ('' before any output)
-    for start, end, category, cluster in find_emoji(text):
+    for start, end, category, cluster in clusters:
         segment = text[pos:start]
         if segment:
             out.append(segment)
@@ -278,6 +284,23 @@ def replace_emoji_in_text(text: str, mode: str, format_cleanup: bool = False) ->
         pos = end
     out.append(text[pos:])
     return ''.join(out), total
+
+
+def replace_emoji_in_text(text: str, mode: str, format_cleanup: bool = False) -> tuple:
+    """Remove or replace emoji clusters in text.
+    Returns (new_text, cluster_count).
+    """
+    return apply_clusters(text, find_emoji(text), mode, format_cleanup)
+
+
+def _line_starts(content: str) -> list:
+    """Offsets where each line begins, in order (line i starts at starts[i])."""
+    starts = [0]
+    pos = content.find('\n')
+    while pos != -1:
+        starts.append(pos + 1)
+        pos = content.find('\n', pos + 1)
+    return starts
 
 
 def process_file(filepath: str, verbose: bool = True, fix: bool = False, dry_run: bool = False, backup: bool = False, mode: str = 'strip', format_cleanup: bool = False) -> tuple:
@@ -320,29 +343,35 @@ def process_file(filepath: str, verbose: bool = True, fix: bool = False, dry_run
                 print(f"Skipping binary file: {filepath}", file=sys.stderr)
             return False, {}, 0, False, False
 
-        # Split preserving newlines to keep exact line numbering aligned
-        lines = content.split('\n')
-        for line_num, line in enumerate(lines, 1):
-            categories = categorize_emoji(line)
-            if categories:
-                if verbose:
-                    prefix = "[SELF-DEFINITION] " if is_excluded else ""
-                    display_line = line.rstrip('\r')
-                    print(f"{prefix}{filepath}:{line_num}: {display_line}")
-                emoji_found = True
+        # Single pass: detect every cluster once, then report and fix from it
+        clusters = list(find_emoji(content))
+        if clusters:
+            emoji_found = True
 
-                for category, data in categories.items():
-                    if category not in file_summary:
-                        file_summary[category] = dict(data)
-                    else:
-                        file_summary[category]['count'] += data['count']
+            if verbose:
+                prefix = "[SELF-DEFINITION] " if is_excluded else ""
+                starts = _line_starts(content)
+                line_idx = 0
+                last_printed = -1
+                for start, _end, _category, _cluster in clusters:
+                    while line_idx + 1 < len(starts) and starts[line_idx + 1] <= start:
+                        line_idx += 1
+                    if line_idx != last_printed:
+                        line_end = content.find('\n', starts[line_idx])
+                        if line_end == -1:
+                            line_end = len(content)
+                        display_line = content[starts[line_idx]:line_end].rstrip('\r')
+                        print(f"{prefix}{filepath}:{line_idx + 1}: {display_line}")
+                        last_printed = line_idx
+
+            file_summary = summarize_clusters(clusters)
 
         if fix and emoji_found:
             if is_excluded:
                 if verbose:
                     print(f"[SKIPPED FIX] Excluded self script from replacement: {filepath}")
             else:
-                new_content, count_to_replace = replace_emoji_in_text(content, mode, format_cleanup)
+                new_content, count_to_replace = apply_clusters(content, clusters, mode, format_cleanup)
                 if count_to_replace > 0:
                     if dry_run:
                         replacements_made = count_to_replace
@@ -400,26 +429,35 @@ def process_stdin(output, verbose: bool = True, fix: bool = False, dry_run: bool
     """
     # surrogateescape round-trips any non-UTF-8 bytes unchanged
     content = sys.stdin.buffer.read().decode('utf-8', 'surrogateescape')
+    clusters = list(find_emoji(content))
+
     file_summary = {}
-    for line_num, line in enumerate(content.split('\n'), 1):
-        categories = categorize_emoji(line)
-        if categories and verbose:
-            display_line = line.rstrip('\r').encode('utf-8', 'surrogateescape').decode('utf-8', 'replace')
-            print(f"<stdin>:{line_num}: {display_line}")
-        for category, data in categories.items():
-            if category in file_summary:
-                file_summary[category]['count'] += data['count']
-            else:
-                file_summary[category] = dict(data)
+    if clusters:
+        if verbose:
+            starts = _line_starts(content)
+            line_idx = 0
+            last_printed = -1
+            for start, _end, _category, _cluster in clusters:
+                while line_idx + 1 < len(starts) and starts[line_idx + 1] <= start:
+                    line_idx += 1
+                if line_idx != last_printed:
+                    line_end = content.find('\n', starts[line_idx])
+                    if line_end == -1:
+                        line_end = len(content)
+                    display_line = content[starts[line_idx]:line_end].rstrip('\r')
+                    display_line = display_line.encode('utf-8', 'surrogateescape').decode('utf-8', 'replace')
+                    print(f"<stdin>:{line_idx + 1}: {display_line}")
+                    last_printed = line_idx
+        file_summary = summarize_clusters(clusters)
 
     if not fix:
         replacements_made = 0
     else:
-        new_content, replacements_made = replace_emoji_in_text(content, mode, format_cleanup)
+        new_content, replacements_made = apply_clusters(content, clusters, mode, format_cleanup)
         if not dry_run:
             output.write(new_content.encode('utf-8', 'surrogateescape'))
             output.flush()
-    return bool(file_summary), file_summary, replacements_made, False, False
+    return bool(clusters), file_summary, replacements_made, False, False
 
 
 def scan_directory(path: str, recursive: bool = False):
