@@ -55,8 +55,8 @@ TAG_CHARS = {chr(c) for c in range(0xE0020, 0xE0080)}  # subdivision-flag tags
 CLUSTER_COMPONENTS = {ZWJ, VS16, VS15, KEYCAP} | SKIN_TONES | TAG_CHARS
 KEYCAP_BASES = '0123456789#*'
 
-# Curated ASCII equivalents for --mode replace, keyed by the cluster's first
-# character. Emoji not listed here are removed in replace mode as well.
+# Curated ASCII equivalents for --mode map, keyed by the cluster's first
+# character. Emoji not listed here are stripped in map mode.
 REPLACEMENT_MAP = {
     '\u2705': '[ok]',        # WHITE HEAVY CHECK MARK (✅)
     '\u2714': '[ok]',        # HEAVY CHECK MARK (✔)
@@ -93,7 +93,7 @@ REPLACEMENT_MAP = {
     '\u2b07': 'v',          # DOWNWARDS BLACK ARROW (⬇)
 }
 
-MODES = ('remove', 'replace')
+MODES = ('strip', 'space', 'map')
 
 # File argument meaning stdin (a file really named '-' can be passed as ./-)
 STDIN_TARGET = '-'
@@ -201,9 +201,11 @@ def cluster_replacement(cluster: str, category: str, mode: str) -> str:
     if category == 'ORPHAN_COMPONENT':
         # Joiners and selectors are invisible; deleting needs no substitute
         return ''
-    if mode == 'replace':
+    if mode == 'map':
         return REPLACEMENT_MAP.get(cluster[0], '')
-    return ''
+    if mode == 'space':
+        return ' '
+    return ''  # strip
 
 
 def replace_emoji_in_text(text: str, mode: str) -> tuple:
@@ -220,6 +222,8 @@ def replace_emoji_in_text(text: str, mode: str) -> tuple:
             out.append(segment)
             prev = segment[-1]
         replacement = cluster_replacement(cluster, category, mode)
+        if replacement == ' ' and (prev == ' ' or (end < len(text) and text[end] == ' ')):
+            replacement = ''  # a blank next to an existing space is redundant
         if replacement:
             out.append(replacement)
             prev = replacement[-1]
@@ -234,7 +238,7 @@ def replace_emoji_in_text(text: str, mode: str) -> tuple:
     return ''.join(out), total
 
 
-def process_file(filepath: str, verbose: bool = True, fix: bool = False, dry_run: bool = False, backup: bool = False, mode: str = 'remove') -> tuple:
+def process_file(filepath: str, verbose: bool = True, fix: bool = False, dry_run: bool = False, backup: bool = False, mode: str = 'strip') -> tuple:
     """Scan and optionally clean emoji in a file.
     Returns (emoji_found, file_summary, replacements_made, is_excluded, file_error).
     """
@@ -340,7 +344,7 @@ def stdin_has_data() -> bool:
     return stat.S_ISFIFO(mode) or stat.S_ISREG(mode)
 
 
-def process_stdin(output, verbose: bool = True, fix: bool = False, dry_run: bool = False, mode: str = 'remove') -> tuple:
+def process_stdin(output, verbose: bool = True, fix: bool = False, dry_run: bool = False, mode: str = 'strip') -> tuple:
     """Scan stdin; with fix (and not dry_run) write the cleaned text to output as a filter.
     Returns the same tuple as process_file.
     """
@@ -411,8 +415,8 @@ def main():
     parser = argparse.ArgumentParser(description='Detect and remove or replace emoji in files')
     parser.add_argument('files', nargs='*', help="Files or directories to scan, or '-' for stdin (default: piped stdin, else current directory)")
     parser.add_argument('-r', '--recursive', action='store_true', help='Scan directories recursively')
-    parser.add_argument('--fix', action='store_true', help="Clean detected emoji (remove, or replace with ASCII equivalents via --mode replace)")
-    parser.add_argument('--mode', choices=MODES, default='remove', help="Cleaning mode: 'remove' deletes emoji clusters, 'replace' substitutes ASCII equivalents where the curated map has one (default: remove)")
+    parser.add_argument('--fix', action='store_true', help="Clean detected emoji (strip, or substitute via --mode space|map)")
+    parser.add_argument('--mode', choices=MODES, default='strip', help="Cleaning mode: 'strip' deletes emoji clusters, 'space' substitutes a single blank, 'map' substitutes ASCII equivalents where the curated map has one (default: strip)")
     parser.add_argument('--dry-run', action='store_true', help='Simulate cleaning with --fix without altering files')
     parser.add_argument('--backup', action='store_true', help='Create .bak backup files before modifying with --fix')
     parser.add_argument('--json', action='store_true', help='Output summary strictly as JSON to stdout')

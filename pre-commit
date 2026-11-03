@@ -77,7 +77,7 @@ reject() {
     echo "------------------------------------------------------------------------" >&2
     echo "[emoji pre-commit] REJECTED: '$file' has emoji staged, and $1." >&2
     echo "                    Run: detect_emoji.py --fix -- \"./$file\"" >&2
-    echo "                    (add --mode replace to substitute ASCII equivalents)" >&2
+    echo "                    (add --mode space or --mode map to substitute)" >&2
     echo "                    Exempt a path in .gitattributes with: <path> -emoji" >&2
     echo "------------------------------------------------------------------------" >&2
     exit 1

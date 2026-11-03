@@ -89,7 +89,7 @@ def test_dry_run_implies_fix():
         os.remove(path)
 
 
-def test_remove_is_default_mode():
+def test_strip_is_default_mode():
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
         f.write(f"hello {EMOJI} world\n")
         path = f.name
@@ -102,12 +102,38 @@ def test_remove_is_default_mode():
         os.remove(path)
 
 
-def test_replace_mode_substitutes_ascii():
+def test_space_mode_substitutes_single_blank():
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
+        f.write(f"a{EMOJI}b\nhello {EMOJI} world\nx {EMOJI}y\n")
+        path = f.name
+    try:
+        res = run_emoji("--fix", "--mode", "space", path)
+        assert res.returncode == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "a b\nhello world\nx y\n"
+    finally:
+        os.remove(path)
+
+
+def test_space_mode_keycap_and_orphans_untouched_by_blank():
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
+        f.write("1\ufe0f\u20e3 x\nok\ufe0f there\n")
+        path = f.name
+    try:
+        res = run_emoji("--fix", "--mode", "space", path)
+        assert res.returncode == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "1 x\nok there\n"
+    finally:
+        os.remove(path)
+
+
+def test_map_mode_substitutes_ascii():
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
         f.write("\u2705 shipped\n\u26a0 careful\n\u2764 it\n")
         path = f.name
     try:
-        res = run_emoji("--fix", "--mode", "replace", path)
+        res = run_emoji("--fix", "--mode", "map", path)
         assert res.returncode == 0
         with open(path, encoding="utf-8") as f:
             assert f.read() == "[ok] shipped\n[warning] careful\n<3 it\n"
@@ -115,12 +141,12 @@ def test_replace_mode_substitutes_ascii():
         os.remove(path)
 
 
-def test_replace_mode_unmapped_falls_back_to_removal():
+def test_map_mode_unmapped_falls_back_to_strip():
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
         f.write("\U0001F680 launch\n")
         path = f.name
     try:
-        res = run_emoji("--fix", "--mode", "replace", path)
+        res = run_emoji("--fix", "--mode", "map", path)
         assert res.returncode == 0
         with open(path, encoding="utf-8") as f:
             assert f.read() == "launch\n"

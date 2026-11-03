@@ -31,7 +31,7 @@ locale/**
 ---
 
 ## Directory Contents
-- **`detect_emoji.py`**: Standalone Python 3 scanner and cleaner (supports `-r`, `--fix`, `--mode remove|replace`, `--dry-run`, `--backup`, `--json`, `--exit-code`, and `-q`; requires Python 3.7+).
+- **`detect_emoji.py`**: Standalone Python 3 scanner and cleaner (supports `-r`, `--fix`, `--mode strip|space|map`, `--dry-run`, `--backup`, `--json`, `--exit-code`, and `-q`; requires Python 3.7+).
 - **`pre-commit`**: POSIX `/bin/sh` hook script placed in `~/.git_hooks/`.
 - **`setup.sh`**: Setup installer for macOS and Linux (`sh`/`bash`/`zsh`).
 - **`setup.csh`**: Setup installer for FreeBSD and `csh`/`tcsh` shells.
@@ -62,8 +62,9 @@ If a different global pre-commit hook already occupies `~/.git_hooks/pre-commit`
 ---
 
 ## Cleaning Modes
-- **remove** (default): delete each emoji cluster. A deletion flanked by spaces collapses the doubled space it would leave behind.
-- **replace**: substitute a curated ASCII equivalent where one exists, then delete the rest:
+- **strip** (default): delete each emoji cluster outright. A deletion flanked by spaces collapses the doubled space it would leave behind.
+- **space**: substitute a single blank for each cluster; an adjacent space is absorbed so no doubled spaces appear.
+- **map**: substitute a curated ASCII equivalent where one exists, then strip the rest:
 
 | Emoji cluster | ASCII |
 |---------------|-------|
