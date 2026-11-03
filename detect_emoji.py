@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -40,8 +41,11 @@ EMOJI_RANGES = [
 ]
 
 EMOJI_CHARS = set()
+CODEPOINT_TO_CATEGORY = {}
 for _name, _lo, _hi in EMOJI_RANGES:
-    EMOJI_CHARS.update(range(_lo, _hi + 1))
+    for _cp in range(_lo, _hi + 1):
+        EMOJI_CHARS.add(_cp)
+        CODEPOINT_TO_CATEGORY[_cp] = _name
 
 REGIONAL_INDICATORS = set(range(0x1F1E6, 0x1F200))
 
@@ -52,7 +56,8 @@ VS15 = '\ufe0e'         # text variation selector
 KEYCAP = '\u20e3'       # combining enclosing keycap
 SKIN_TONES = {chr(c) for c in range(0x1F3FB, 0x1F400)}
 TAG_CHARS = {chr(c) for c in range(0xE0020, 0xE0080)}  # subdivision-flag tags
-CLUSTER_COMPONENTS = {ZWJ, VS16, VS15, KEYCAP} | SKIN_TONES | TAG_CHARS
+# Note: ZWJ is handled explicitly in find_emoji so multi-character sequences remain unified
+CLUSTER_COMPONENTS = {VS16, VS15, KEYCAP} | SKIN_TONES | TAG_CHARS
 KEYCAP_BASES = '0123456789#*'
 
 # Curated ASCII equivalents for --mode map, keyed by the cluster's first
@@ -74,17 +79,17 @@ REPLACEMENT_MAP = {
     '\u2b50': '*',           # WHITE MEDIUM STAR (⭐)
     '\u2734': '*',           # HEAVY EIGHT POINTED BLACK STAR (✴)
     '\u2733': '*',           # EIGHT SPOKED ASTERISK (✳)
-    '\u1f44d': '+1',        # THUMBS UP SIGN (👍)
-    '\u1f44e': '-1',        # THUMBS DOWN SIGN (👎)
-    '\u1f642': ':)',        # SLIGHTLY SMILING FACE (🙂)
-    '\u1f600': ':)',        # GRINNING FACE (😀)
-    '\u1f603': ':)',        # SMILING FACE WITH OPEN MOUTH (😃)
-    '\u1f604': ':)',        # SMILING FACE WITH OPEN MOUTH AND SMILING EYES (😄)
-    '\u1f60a': ':)',        # SMILING FACE WITH SMILING EYES (😊)
-    '\u1f609': ';)',        # WINKING FACE (😉)
-    '\u1f61e': ':(',        # DISAPPOINTED FACE (😞)
-    '\u1f622': ':(',        # CRYING FACE (😢)
-    '\u1f641': ':(',        # SLIGHTLY FROWNING FACE (🙁)
+    '\U0001f44d': '+1',      # THUMBS UP SIGN (👍)
+    '\U0001f44e': '-1',      # THUMBS DOWN SIGN (👎)
+    '\U0001f642': ':)',      # SLIGHTLY SMILING FACE (🙂)
+    '\U0001f600': ':)',      # GRINNING FACE (😀)
+    '\U0001f603': ':)',      # SMILING FACE WITH OPEN MOUTH (😃)
+    '\U0001f604': ':)',      # SMILING FACE WITH OPEN MOUTH AND SMILING EYES (😄)
+    '\U0001f60a': ':)',      # SMILING FACE WITH SMILING EYES (😊)
+    '\U0001f609': ';)',      # WINKING FACE (😉)
+    '\U0001f61e': ':(',      # DISAPPOINTED FACE (😞)
+    '\U0001f622': ':(',      # CRYING FACE (😢)
+    '\U0001f641': ':(',      # SLIGHTLY FROWNING FACE (🙁)
     '\u263a': ':)',         # WHITE SMILING FACE (☺)
     '\u2639': ':(',         # WHITE FROWNING FACE (☹)
     '\u27a1': '->',         # BLACK RIGHTWARDS ARROW (➡)
@@ -102,7 +107,10 @@ LEFT_BINDING_PUNCTUATION = ',.;:!?)]}%'
 # File argument meaning stdin (a file really named '-' can be passed as ./-)
 STDIN_TARGET = '-'
 
-DEFAULT_IGNORE_DIRS = {'.git', '.venv', 'venv', '__pycache__', 'node_modules', '.idea', '.vscode'}
+DEFAULT_IGNORE_DIRS = {'venv', '__pycache__', 'node_modules'}
+
+# Regex searching for any characters >= U+200D (the lowest emoji/component codepoint)
+_CANDIDATE_RE = re.compile(r'[\u200d-\U0010ffff]')
 
 
 def is_self_script(filepath: str) -> bool:
@@ -110,30 +118,38 @@ def is_self_script(filepath: str) -> bool:
     try:
         this_file = os.path.realpath(__file__)
         target_file = os.path.realpath(filepath)
-        return os.path.samefile(this_file, target_file)
+        if os.path.samefile(this_file, target_file):
+            return True
     except (OSError, ValueError):
-        return False
+        pass
+    try:
+        if os.path.basename(filepath) == 'detect_emoji.py':
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                header = f.read(2048)
+                if 'EMOJI_RANGES' in header:
+                    return True
+    except OSError:
+        pass
+    return False
 
 
 def _category_of(cp: int) -> str:
-    for name, lo, hi in EMOJI_RANGES:
-        if lo <= cp <= hi:
-            return name
-    return 'EMOJI'
+    return CODEPOINT_TO_CATEGORY.get(cp, 'EMOJI')
 
 
 def _codepoints(cluster: str) -> str:
     return '+'.join('U+%04X' % ord(c) for c in cluster)
 
 
-def _is_keycap_at(text: str, i: int) -> bool:
-    """True if a keycap sequence (digit/#/* plus U+20E3) starts at index i."""
+def _keycap_end(text: str, i: int):
+    """Return the end index of a keycap sequence starting at i, or None."""
     j = i + 1
-    if j >= len(text):
-        return False
-    if text[j] == VS16:
+    n = len(text)
+    if j < n and text[j] == VS16:
         j += 1
-    return j < len(text) and text[j] == KEYCAP
+    if j < n and text[j] == KEYCAP:
+        return j + 1
+    return None
 
 
 def find_emoji(text: str):
@@ -145,18 +161,20 @@ def find_emoji(text: str):
     skin tones, family groups) intact as a single unit. Orphaned components
     (a stray joiner or selector with no base) are yielded as single clusters.
     """
+    if not _CANDIDATE_RE.search(text):
+        return
+
     i, n = 0, len(text)
     while i < n:
         ch = text[i]
         cp = ord(ch)
-        if ch in KEYCAP_BASES and _is_keycap_at(text, i):
-            j = i + 1
-            if text[j] == VS16:
-                j += 1
-            j += 1  # the KEYCAP char
-            yield (i, j, 'KEYCAP', text[i:j])
-            i = j
-        elif cp in EMOJI_CHARS:
+        if ch in KEYCAP_BASES:
+            k_end = _keycap_end(text, i)
+            if k_end is not None:
+                yield (i, k_end, 'KEYCAP', text[i:k_end])
+                i = k_end
+                continue
+        if cp in EMOJI_CHARS:
             j = i + 1
             if cp in REGIONAL_INDICATORS and j < n and ord(text[j]) in REGIONAL_INDICATORS:
                 j += 1  # a flag is exactly two regional indicators
@@ -165,14 +183,27 @@ def find_emoji(text: str):
                 if c in CLUSTER_COMPONENTS:
                     j += 1
                 elif c == ZWJ:
-                    j += 1
-                    if j < n and ord(text[j]) in EMOJI_CHARS:
-                        j += 1
+                    # Lookahead: is there a joined emoji or keycap after ZWJ?
+                    if j + 1 < n and (ord(text[j + 1]) in EMOJI_CHARS or text[j + 1] in KEYCAP_BASES):
+                        j += 1  # consume ZWJ
+                        if text[j] in KEYCAP_BASES:
+                            k_sub = _keycap_end(text, j)
+                            if k_sub is not None:
+                                j = k_sub
+                            else:
+                                # Plain text, not a keycap: leave the digit alone
+                                j -= 1
+                                break
+                        else:
+                            j += 1  # consume joined emoji base
+                    else:
+                        j += 1  # trailing ZWJ bound to this cluster
+                        break
                 else:
                     break
             yield (i, j, _category_of(cp), text[i:j])
             i = j
-        elif ch in CLUSTER_COMPONENTS:
+        elif ch in CLUSTER_COMPONENTS or ch == ZWJ:
             yield (i, i + 1, 'ORPHAN_COMPONENT', ch)
             i += 1
         else:
@@ -191,7 +222,7 @@ def categorize_emoji(text: str) -> dict:
                 'count': 0,
                 'char': cluster,
                 'unicode_format': _codepoints(cluster),
-                'unicode_escape': ''.join('\\u%04x' % ord(c) for c in cluster),
+                'unicode_escape': ''.join('\\u%04x' % ord(c) if ord(c) <= 0xFFFF else '\\U%08x' % ord(c) for c in cluster),
             }
         found[category]['count'] += 1
     return found
@@ -265,11 +296,23 @@ def process_file(filepath: str, verbose: bool = True, fix: bool = False, dry_run
     is_excluded = is_self_script(filepath)
 
     try:
+        # Fast binary check: inspect the first 8KB for null bytes before full decode
+        try:
+            with open(filepath, 'rb') as f_bin:
+                header = f_bin.read(8192)
+                if b'\x00' in header:
+                    if verbose:
+                        print(f"Skipping binary file: {filepath}", file=sys.stderr)
+                    return False, {}, 0, False, False
+        except OSError as e:
+            print(f"Error accessing {filepath}: {e}", file=sys.stderr)
+            return False, {}, 0, False, True
+
         # Open with newline='' to preserve original CRLF / LF line endings
         with open(filepath, 'r', encoding='utf-8', newline='') as f:
             content = f.read()
 
-        # Binary check: null bytes usually indicate non-text files
+        # Binary check: null bytes anywhere in content
         if '\x00' in content:
             if verbose:
                 print(f"Skipping binary file: {filepath}", file=sys.stderr)
@@ -288,13 +331,9 @@ def process_file(filepath: str, verbose: bool = True, fix: bool = False, dry_run
 
                 for category, data in categories.items():
                     if category not in file_summary:
-                        file_summary[category] = {
-                            'count': 0,
-                            'char': data['char'],
-                            'unicode_format': data['unicode_format'],
-                            'unicode_escape': data['unicode_escape'],
-                        }
-                    file_summary[category]['count'] += data['count']
+                        file_summary[category] = dict(data)
+                    else:
+                        file_summary[category]['count'] += data['count']
 
         if fix and emoji_found:
             if is_excluded:
@@ -448,6 +487,7 @@ def main():
 
     overall_summary = {}
     any_found = False
+    unfixed_remain = False
     any_errors = False
     total_replacements = 0
     excluded_files = []
@@ -485,6 +525,8 @@ def main():
         if found:
             if not is_excluded:
                 any_found = True
+                if not args.fix or args.dry_run or file_error:
+                    unfixed_remain = True
 
             if verbose and not args.fix and not is_excluded:
                 print(f"Emoji found in: {filepath}")
@@ -505,6 +547,7 @@ def main():
     if args.json:
         payload = {
             'emoji_found': any_found,
+            'unfixed_remain': unfixed_remain,
             'errors_encountered': any_errors,
             'total_detected': sum(d['count'] for d in overall_summary.values()),
             'fix_enabled': args.fix,
@@ -538,7 +581,7 @@ def main():
 
     if args.exit_code:
         # Exit with error if un-excluded emoji remain or if file errors occurred
-        sys.exit(1 if (any_found or any_errors) else 0)
+        sys.exit(1 if (unfixed_remain or any_errors) else 0)
 
 
 if __name__ == "__main__":

@@ -325,3 +325,57 @@ def test_self_script_excluded_from_fix():
     finally:
         with open(SCRIPT_PATH, "wb") as f:
             f.write(before)
+
+
+def test_map_mode_supplementary_plane_emoji():
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
+        f.write("\U0001f44d good \U0001f44e bad \U0001f600 smile \U0001f622 cry\n")
+        path = f.name
+    try:
+        res = run_emoji("--fix", "--mode", "map", path)
+        assert res.returncode == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "+1 good -1 bad :) smile :( cry\n"
+    finally:
+        os.remove(path)
+
+
+def test_zwj_cluster_treated_as_single_cluster():
+    import detect_emoji
+    family = "\U0001F468\u200d\U0001F469\u200d\U0001F467"
+    clusters = list(detect_emoji.find_emoji(family))
+    assert len(clusters) == 1
+    assert clusters[0][3] == family
+
+    cleaned, count = detect_emoji.replace_emoji_in_text(f"hi {family} bye", mode="strip")
+    assert count == 1
+    assert cleaned == "hi bye"
+
+
+def test_zwj_followed_by_bare_digit_keeps_digit():
+    import detect_emoji
+    # Malformed sequence: ZWJ then a digit with no keycap; the digit is text
+    cleaned, _ = detect_emoji.replace_emoji_in_text("a\U0001F468\u200d123 b", mode="strip")
+    assert cleaned == "a123 b"
+    cleaned, _ = detect_emoji.replace_emoji_in_text("ok\U0001F468\u200d#z", mode="strip")
+    assert cleaned == "ok#z"
+
+
+def test_fix_with_exit_code_zero_when_cleaned():
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
+        f.write(f"file with {EMOJI} emoji\n")
+        path = f.name
+    try:
+        res = run_emoji("--fix", "--exit-code", path)
+        assert res.returncode == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "file with emoji\n"
+    finally:
+        os.remove(path)
+
+
+def test_unicode_escape_formatting_smp():
+    import detect_emoji
+    cats = detect_emoji.categorize_emoji(EMOJI)
+    assert cats["EMOTICONS"]["unicode_escape"] == "\\U0001f600"
+
