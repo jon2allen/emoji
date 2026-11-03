@@ -131,11 +131,18 @@ if [ "$INSTALL_HOOK" -eq 1 ]; then
     # example the em-dash cleaner). The new hook chains to pre-commit-emdash /
     # pre-commit-legacy siblings, so preserved hooks keep running.
     if [ -f "$HOOKS_DIR/pre-commit" ] && ! cmp -s "$HOOKS_DIR/pre-commit" "$SCRIPT_DIR/pre-commit"; then
-        PRESERVE_AS="$HOOKS_DIR/pre-commit-legacy"
         if grep -q "detect_emdash" "$HOOKS_DIR/pre-commit" 2>/dev/null; then
             PRESERVE_AS="$HOOKS_DIR/pre-commit-emdash"
-        elif [ -f "$PRESERVE_AS" ]; then
-            PRESERVE_AS="$HOOKS_DIR/pre-commit-legacy.1"
+        else
+            PRESERVE_AS="$HOOKS_DIR/pre-commit-legacy"
+        fi
+        # Never overwrite a previously preserved hook: bump the numeric suffix
+        if [ -f "$PRESERVE_AS" ]; then
+            N=1
+            while [ -f "$PRESERVE_AS.$N" ]; do
+                N=$((N + 1))
+            done
+            PRESERVE_AS="$PRESERVE_AS.$N"
         fi
         mv "$HOOKS_DIR/pre-commit" "$PRESERVE_AS"
         echo "      NOTE: existing pre-commit hook preserved as $(basename "$PRESERVE_AS") (chained automatically)."

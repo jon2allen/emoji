@@ -143,10 +143,14 @@ if ( $INSTALL_HOOK == 1 ) then
             grep -q "detect_emdash" "$HOOKS_DIR/pre-commit"
             if ( $status == 0 ) then
                 set PRESERVE_AS = "$HOOKS_DIR/pre-commit-emdash"
-            else
-                if ( -f "$PRESERVE_AS" ) then
-                    set PRESERVE_AS = "$HOOKS_DIR/pre-commit-legacy.1"
-                endif
+            endif
+            # Never overwrite a previously preserved hook: bump the numeric suffix
+            if ( -f "$PRESERVE_AS" ) then
+                @ N = 1
+                while ( -f "$PRESERVE_AS.$N" )
+                    @ N = $N + 1
+                end
+                set PRESERVE_AS = "$PRESERVE_AS.$N"
             endif
             mv "$HOOKS_DIR/pre-commit" "$PRESERVE_AS"
             echo "      NOTE: existing pre-commit hook preserved as `basename $PRESERVE_AS` (chained automatically)."
