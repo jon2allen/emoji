@@ -5,7 +5,9 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import sys
+import threading
 
 # Emoji codepoint ranges, grouped for reporting.
 # (category, first codepoint, last codepoint), inclusive.
@@ -459,6 +461,125 @@ def resolve_targets(paths: list, recursive: bool = False):
             print(f"Target not found: {path}", file=sys.stderr)
 
 
+def _cat_file_content(stream, spec: bytes):
+    """Read one `git cat-file --batch` response for the given request spec.
+    Returns the blob content, or None when the object is missing.
+    Requests are NUL-terminated (paths may contain newlines), but responses
+    stay LF-framed: "<oid> SP <type> SP <size> LF <content> LF". The size in
+    the header makes the content unambiguous regardless of embedded newlines.
+    """
+    first = stream.read(1)
+    if not first:
+        raise EOFError('cat-file stream ended early')
+    if first == b':':
+        # Missing object: the spec is echoed verbatim ("<spec> missing\\n")
+        # and may itself contain newlines, so consume by known length.
+        stream.read(len(spec) + 8)
+        return None
+    header = first
+    while True:
+        b = stream.read(1)
+        if not b:
+            raise EOFError('cat-file stream ended early')
+        if b == b'\n':
+            break
+        header += b
+    _oid, _type, size_str = header.split(b' ', 2)
+    size = int(size_str)
+    content = stream.read(size)
+    if len(content) != size:
+        raise EOFError('cat-file stream ended early')
+    stream.read(1)  # trailing newline after the content
+    return content
+
+
+def scan_staged() -> int:
+    """Hook mode: read NUL-delimited staged paths from stdin, scan the staged
+    blob of each in a single batched pass, and write the paths whose blob
+    contains emoji (NUL-delimited) to stdout.
+    Exit status: 0 = clean, 1 = emoji found, 2 = internal error.
+    """
+    paths = [p for p in sys.stdin.buffer.read().split(b'\x00') if p]
+    files = []
+    for p in paths:
+        fs_path = os.fsdecode(p)
+        if os.path.isfile(fs_path) and not os.path.islink(fs_path):
+            files.append(p)
+    if not files:
+        return 0
+
+    # One git process: exempt paths are filtered by the -emoji attribute
+    try:
+        attr = subprocess.run(
+            ['git', 'check-attr', '-z', '--stdin', 'emoji'],
+            input=b'\x00'.join(files) + b'\x00',
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as e:
+        print(f"[emoji pre-commit] cannot run git check-attr: {e}", file=sys.stderr)
+        return 2
+    if attr.returncode != 0:
+        print(f"[emoji pre-commit] git check-attr failed: "
+              f"{attr.stderr.decode('utf-8', 'replace').strip()}", file=sys.stderr)
+        return 2
+
+    # Records are "<path> NUL <attr> NUL <value> NUL"
+    fields = attr.stdout.split(b'\x00')
+    if fields and fields[-1] == b'':
+        fields.pop()
+    if len(fields) % 3:
+        print('[emoji pre-commit] unexpected check-attr output layout', file=sys.stderr)
+        return 2
+    candidates = [fields[i] for i in range(0, len(fields), 3) if fields[i + 2] != b'unset']
+    if not candidates:
+        return 0
+
+    # One git process: fetch every staged blob at once
+    specs = [b':' + p for p in candidates]
+    try:
+        proc = subprocess.Popen(['git', 'cat-file', '--batch', '-z'],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    except OSError as e:
+        print(f"[emoji pre-commit] cannot run git cat-file: {e}", file=sys.stderr)
+        return 2
+
+    # Feed requests from a thread so a large batch cannot deadlock on pipe
+    # buffers while git is writing responses back
+    def feed():
+        try:
+            for s in specs:
+                proc.stdin.write(s + b'\x00')
+            proc.stdin.close()
+        except OSError:
+            pass
+
+    writer = threading.Thread(target=feed)
+    writer.start()
+    dirty = []
+    try:
+        for spec in specs:
+            content = _cat_file_content(proc.stdout, spec)
+            if content is None:
+                continue
+            if b'\x00' in content:
+                continue  # binary
+            text = content.decode('utf-8', 'surrogateescape')
+            if next(find_emoji(text), None) is not None:
+                dirty.append(spec[1:])
+    except (EOFError, ValueError) as e:
+        print(f"[emoji pre-commit] failed to parse cat-file output: {e}", file=sys.stderr)
+        return 2
+    finally:
+        writer.join()
+        proc.stdout.close()
+        proc.wait()
+
+    if dirty:
+        sys.stdout.buffer.write(b'\x00'.join(dirty) + b'\x00')
+        sys.stdout.buffer.flush()
+        return 1
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description='Detect and remove or replace emoji in files')
     parser.add_argument('files', nargs='*', help="Files or directories to scan, or '-' for stdin (default: piped stdin, else current directory)")
@@ -471,7 +592,11 @@ def main():
     parser.add_argument('--json', action='store_true', help='Output summary strictly as JSON to stdout')
     parser.add_argument('-q', '--quiet', action='store_true', help='Suppress per-file progress output')
     parser.add_argument('--exit-code', action='store_true', help='Exit with code 1 if emoji remain uncleaned (detected without --fix, or --dry-run) or if errors occur (for CI)')
+    parser.add_argument('--scan-staged', action='store_true', help='(hook mode) read NUL-delimited staged paths on stdin and print the ones whose staged blob contains emoji')
     args = parser.parse_args()
+
+    if args.scan_staged:
+        sys.exit(scan_staged())
 
     # If --dry-run is supplied without --fix, automatically imply fix inspection mode
     if args.dry_run and not args.fix:

@@ -1,6 +1,8 @@
 #!/bin/sh
 # Portable Git pre-commit hook (POSIX sh compatible across macOS, Linux, FreeBSD)
 # Safely detects and cleans emoji in staged files without corrupting index.
+# The every-file scan is batched into a single Python invocation; only files
+# with emoji go through the per-file fix loop.
 
 # Real path of this hook, computed once for loop guards below
 HOOK_REAL=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
@@ -83,26 +85,36 @@ reject() {
     exit 1
 }
 
-# 4. Check the staged content of each file, which is what will actually be committed
+# 4. Staged file list stays NUL-delimited end to end: filenames may contain
+# newlines, and -z exists precisely so they survive this pipeline.
 TMP_LIST=$(mktemp 2>/dev/null || mktemp -t 'emoji_staged')
-TMP_BLOB=$(mktemp 2>/dev/null || mktemp -t 'emoji_blob')
-trap 'rm -f "$TMP_LIST" "$TMP_BLOB"' EXIT
+TMP_DIRTY=$(mktemp 2>/dev/null || mktemp -t 'emoji_dirty')
+trap 'rm -f "$TMP_LIST" "$TMP_DIRTY"' EXIT
 
-# -z avoids path quoting; tr keeps the list readable by POSIX `read`, which has no -d
-git diff --cached --name-only -z --diff-filter=d | tr '\000' '\n' > "$TMP_LIST"
+git diff --cached --name-only -z --diff-filter=d > "$TMP_LIST"
+[ -s "$TMP_LIST" ] || exit 0
+
+# 5. One batched scan of every staged blob: git check-attr and git cat-file
+# each run exactly once inside the scanner, and only files whose staged blob
+# contains emoji come back on the dirty list.
+"$PYTHON_BIN" "$SCRIPT_PATH" -q --scan-staged < "$TMP_LIST" > "$TMP_DIRTY"
+SCAN_STATUS=$?
+case "$SCAN_STATUS" in
+    0) exit 0 ;;
+    1) ;;
+    *)
+        echo "[emoji pre-commit] Warning: staged scan failed (status $SCAN_STATUS), skipping emoji check." >&2
+        exit 0
+        ;;
+esac
+
+# 6. Fix loop. Detection was NUL-safe; this newline conversion only feeds the
+# rare fixing path: a path that contains a newline cannot be auto-fixed here,
+# so it ends up rejected instead of silently committed.
+tr '\000' '\n' < "$TMP_DIRTY" > "$TMP_LIST"
 
 while IFS= read -r file; do
     [ -z "$file" ] && continue
-    # Skip submodules, symlinks, and files removed from the working tree
-    [ -f "$file" ] && [ ! -L "$file" ] || continue
-    case "$(git check-attr emoji -- "$file")" in
-        *": unset") continue ;;
-    esac
-
-    git cat-file blob ":$file" > "$TMP_BLOB" || continue
-    if "$PYTHON_BIN" "$SCRIPT_PATH" -q --exit-code -- "$TMP_BLOB" >/dev/null 2>&1; then
-        continue
-    fi
 
     # Fixing touches the working tree, so it is only safe when that matches the index
     if ! git diff --quiet -- "$file"; then
@@ -116,7 +128,7 @@ while IFS= read -r file; do
     if ! "$PYTHON_BIN" "$SCRIPT_PATH" -q --exit-code -- "./$file" >/dev/null 2>&1; then
         reject "they could not be fixed automatically"
     fi
-    git add -- "$file"
+    git add -- "$file" || reject "it could not be re-staged (the path may contain a newline); fix it manually"
 done < "$TMP_LIST"
 
 exit 0

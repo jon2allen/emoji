@@ -9,7 +9,7 @@ Compatible across **macOS**, **Linux** (bash/sh), and **FreeBSD** (sh/csh/tcsh).
 ## What It Does
 When installed, running `git commit` in **any** Git repository on your machine will:
 1. Identify all currently staged files (excluding deletions).
-2. Scan them with `detect_emoji.py`.
+2. Scan their staged content in a single batched pass with `detect_emoji.py`.
 3. If any emoji are staged, automatically remove them, dropping any space the removal strands in front of punctuation. Orphaned invisible components (variation selectors, zero-width joiners) are always deleted.
 4. Re-stage the cleaned files before completing the commit.
 
@@ -116,6 +116,8 @@ With `--fix`, the cleaned text goes to stdout and reports go to stderr.
 1. Copies `detect_emoji.py` and `pre-commit` into `~/.git_hooks/`.
 2. Runs `git config --global core.hooksPath ~/.git_hooks`, saving any previous value as `core.hooksPathBackup`.
 3. Applies universally to all current and future Git repositories on the system without needing per-repository configuration.
+
+The hook hands the NUL-delimited list of staged paths to `detect_emoji.py --scan-staged`, which filters exempt paths (`git check-attr`) and reads every staged blob (`git cat-file --batch`) in one batched pass: a 50-file commit pays one Python startup instead of fifty. The staged path list is NUL-delimited end to end, so filenames containing newlines are detected; only the rare fixing loop falls back to newline splitting, and a path it cannot round-trip is rejected rather than silently committed. Requires Git 2.20+ for the batched object protocol.
 
 ---
 

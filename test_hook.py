@@ -133,6 +133,25 @@ def test_hook_format_drops_stranded_space(repo):
     assert head(git, 'f') == b'radiator,\n'
 
 
+def test_newline_named_file_with_emoji_is_rejected(repo):
+    # Filenames may legally contain newlines; detection must not lose them to
+    # a NUL-to-newline conversion (the old hook silently skipped such files).
+    r, git = repo
+    name = 'weird\nname.txt'
+    (r / name).write_bytes(b'a' + EM + b'b\n')
+    git('add', '--', name)
+    assert git('commit', '-qm', 'c', check=False).returncode == 1
+
+
+def test_many_files_commit_quickly(repo):
+    r, git = repo
+    for i in range(50):
+        (r / f'f{i}').write_text(f'file {i}\n')
+    git('add', '.')
+    git('commit', '-qm', 'c')
+    assert head(git, 'f49') == b'file 49\n'
+
+
 def test_unwritable_file_rejected(repo):
     if os.geteuid() == 0:
         pytest.skip('root ignores permissions')
