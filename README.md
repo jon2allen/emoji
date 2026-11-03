@@ -21,11 +21,16 @@ The hook also runs the repository's own `.git/hooks/pre-commit` first, then any 
 Zero-width-joiner sequences (family groups, profession emoji), flags (regional indicator pairs), skin tone modifiers, and keycap sequences are processed as a single cluster, so no half-emoji or orphaned joiners are left behind. A keycap like `1` plus the keycap component reduces to the digit itself.
 
 ### Paths that must keep emoji
-Auto-fix changes string literals as well as prose. Exempt paths in a repository's `.gitattributes`:
+Auto-fix changes string literals as well as prose. Exempt paths or entire projects in a repository's `.gitattributes`:
 
-```
+```gitattributes
+# Exempt an entire project:
+* -emoji
+
+# Exempt specific directories or files:
 tests/fixtures/** -emoji
-locale/**
+locale/** -emoji
+README.md -emoji
 ```
 
 ---
@@ -136,7 +141,39 @@ git config --global --unset core.hooksPathBackup
 rm -rf ~/.git_hooks
 ```
 
-To temporarily bypass the hook on a single commit:
-```bash
-git commit --no-verify
+---
+
+## Bypassing or Exempting Emoji
+If a project, file, or commit legitimately needs emoji, there are three ways to bypass the filter:
+
+### 1. Project or Path Exemption via `.gitattributes` (Recommended)
+Add `-emoji` to `.gitattributes` in the repository root. This is committed with the repo so all collaborators automatically share the exemption:
+
+```gitattributes
+# Exempt the entire project:
+* -emoji
+
+# Exempt specific directories or files:
+docs/** -emoji
+fixtures/** -emoji
+cat_story.txt -emoji
 ```
+
+### 2. One-Off Commit Bypass
+To bypass pre-commit hooks for a single commit:
+
+```bash
+git commit --no-verify -m "commit message"
+# or short form:
+git commit -n -m "commit message"
+```
+
+### 3. Disable Global Hooks for One Repository Only
+To disable the global hook for a specific repository while keeping it active everywhere else on your machine:
+
+```bash
+# Inside the repository where you want to disable global hooks:
+git config core.hooksPath .git/hooks
+```
+
+This sets repository-local config to point back to `.git/hooks`, overriding the global `core.hooksPath` for that repo only.
