@@ -1,0 +1,122 @@
+#!/bin/sh
+# Portable Git pre-commit hook (POSIX sh compatible across macOS, Linux, FreeBSD)
+# Safely detects and cleans emoji in staged files without corrupting index.
+
+# Real path of this hook, computed once for loop guards below
+HOOK_REAL=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+
+# Run a chained hook unless it is this very file (prevents infinite loops when
+# core.hooksPath points back here). Exits with the chained hook's status on failure.
+run_chained_hook() {
+    _path=$1
+    shift
+    [ -f "$_path" ] && [ -x "$_path" ] || return 0
+    _real=$(cd "$(dirname "$_path")" && pwd)/$(basename "$_path")
+    [ "$_real" != "$HOOK_REAL" ] || return 0
+    "$_path" "$@" || exit $?
+}
+
+# 1. Chain to the repository-local hook if present (.git/hooks/pre-commit)
+# This ensures Husky, lint-staged, or secret scanners are NOT bypassed.
+# --git-path would follow core.hooksPath back to this hook, so build the path by hand.
+COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")
+LOCAL_HOOK="$COMMON_DIR/hooks/pre-commit"
+run_chained_hook "$LOCAL_HOOK" "$@"
+
+# 2. Chain to sibling hooks sharing this global hooks directory, so the em-dash
+# cleaner (preserved as pre-commit-emdash) and any other saved hook still run.
+HOOKS_SIBLINGS=$(dirname "$HOOK_REAL")
+run_chained_hook "$HOOKS_SIBLINGS/pre-commit-emdash" "$@"
+run_chained_hook "$HOOKS_SIBLINGS/pre-commit-legacy" "$@"
+
+# 3. Locate Python 3
+PYTHON_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+fi
+
+if [ -z "$PYTHON_BIN" ]; then
+    echo "[emoji pre-commit] Warning: python3 not found on PATH, skipping emoji check." >&2
+    exit 0
+fi
+
+# Locate detect_emoji.py
+SCRIPT_PATH=""
+if [ -f "$HOME/.git_hooks/detect_emoji.py" ]; then
+    SCRIPT_PATH="$HOME/.git_hooks/detect_emoji.py"
+elif [ -f "$HOME/.local/bin/detect_emoji.py" ]; then
+    SCRIPT_PATH="$HOME/.local/bin/detect_emoji.py"
+else
+    # Fallback to sibling directory
+    SIBLING="$(dirname "$0")/detect_emoji.py"
+    if [ -f "$SIBLING" ]; then
+        SCRIPT_PATH="$SIBLING"
+    fi
+fi
+
+if [ -z "$SCRIPT_PATH" ]; then
+    exit 0
+fi
+
+# A broken interpreter must not look like "emoji found" below
+if ! "$PYTHON_BIN" "$SCRIPT_PATH" --help >/dev/null 2>&1; then
+    echo "[emoji pre-commit] Warning: $PYTHON_BIN cannot run $SCRIPT_PATH, skipping emoji check." >&2
+    exit 0
+fi
+
+# `git commit <path>` runs on a temporary index, so a hook's `git add` never reaches
+# the real one and leaves it out of step with HEAD.
+case "$(basename "${GIT_INDEX_FILE:-index}")" in
+    next-index-*) PARTIAL_COMMIT=1 ;; *)
+        PARTIAL_COMMIT=0 ;;
+esac
+
+reject() {
+    echo "------------------------------------------------------------------------" >&2
+    echo "[emoji pre-commit] REJECTED: '$file' has emoji staged, and $1." >&2
+    echo "                    Run: detect_emoji.py --fix -- \"./$file\"" >&2
+    echo "                    (add --mode replace to substitute ASCII equivalents)" >&2
+    echo "                    Exempt a path in .gitattributes with: <path> -emoji" >&2
+    echo "------------------------------------------------------------------------" >&2
+    exit 1
+}
+
+# 4. Check the staged content of each file, which is what will actually be committed
+TMP_LIST=$(mktemp 2>/dev/null || mktemp -t 'emoji_staged')
+TMP_BLOB=$(mktemp 2>/dev/null || mktemp -t 'emoji_blob')
+trap 'rm -f "$TMP_LIST" "$TMP_BLOB"' EXIT
+
+# -z avoids path quoting; tr keeps the list readable by POSIX `read`, which has no -d
+git diff --cached --name-only -z --diff-filter=d | tr '\000' '\n' > "$TMP_LIST"
+
+while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    # Skip submodules, symlinks, and files removed from the working tree
+    [ -f "$file" ] && [ ! -L "$file" ] || continue
+    case "$(git check-attr emoji -- "$file")" in
+        *": unset") continue ;;
+    esac
+
+    git cat-file blob ":$file" > "$TMP_BLOB" || continue
+    if "$PYTHON_BIN" "$SCRIPT_PATH" -q --exit-code -- "$TMP_BLOB" >/dev/null 2>&1; then
+        continue
+    fi
+
+    # Fixing touches the working tree, so it is only safe when that matches the index
+    if ! git diff --quiet -- "$file"; then
+        reject "the file has unstaged edits"
+    fi
+    if [ "$PARTIAL_COMMIT" -eq 1 ]; then
+        reject "this is a 'git commit <path>' commit"
+    fi
+
+    "$PYTHON_BIN" "$SCRIPT_PATH" -q --fix -- "./$file"
+    if ! "$PYTHON_BIN" "$SCRIPT_PATH" -q --exit-code -- "./$file" >/dev/null 2>&1; then
+        reject "they could not be fixed automatically"
+    fi
+    git add -- "$file"
+done < "$TMP_LIST"
+
+exit 0

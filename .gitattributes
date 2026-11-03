@@ -1,0 +1,7 @@
+# Holds the replacement map and test fixtures on purpose
+detect_emoji.py -emoji
+test_emoji.py -emoji
+test_hook.py -emoji
+# Test fixtures also hold dash variants that must survive the em-dash cleaner
+test_emoji.py -emdash
+test_hook.py -emdash
