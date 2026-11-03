@@ -1,7 +1,0 @@
-2026-11-03 15:59:33,240 [ERROR] Configuration file 'config.toml' not found. Using safe defaults.
-2026-11-03 15:59:33,241 [INFO] Starting MCP Command Server
-2026-11-03 15:59:33,272 [INFO] Starting worker 'jon2allen-G5-5090#450363' with the following tasks:
-2026-11-03 15:59:33,272 [INFO] * trace(message: str, ...)
-2026-11-03 15:59:33,273 [INFO] * fail(message: str, ...)
-2026-11-03 15:59:33,273 [INFO] * sleep(seconds: float, ...)
-2026-11-03 15:59:33,280 [INFO] Processing request of type ListToolsRequest
