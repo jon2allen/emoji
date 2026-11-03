@@ -470,7 +470,7 @@ def main():
     parser.add_argument('--backup', action='store_true', help='Create .bak backup files before modifying with --fix')
     parser.add_argument('--json', action='store_true', help='Output summary strictly as JSON to stdout')
     parser.add_argument('-q', '--quiet', action='store_true', help='Suppress per-file progress output')
-    parser.add_argument('--exit-code', action='store_true', help='Exit with code 1 if emoji found or read errors (for CI)')
+    parser.add_argument('--exit-code', action='store_true', help='Exit with code 1 if emoji remain uncleaned (detected without --fix, or --dry-run) or if errors occur (for CI)')
     args = parser.parse_args()
 
     # If --dry-run is supplied without --fix, automatically imply fix inspection mode

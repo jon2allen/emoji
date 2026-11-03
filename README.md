@@ -79,6 +79,14 @@ If a different global pre-commit hook already occupies `~/.git_hooks/pre-commit`
 
 The map lives at the top of `detect_emoji.py` and is easy to extend.
 
+### Exit Codes
+`--exit-code` is for CI and scripting:
+
+- `0`: no emoji found, or every detected cluster was successfully cleaned (`--fix`)
+- `1`: emoji remain uncleaned (detected without `--fix`, or with `--dry-run`), or a file could not be read or written
+
+Note the difference from the em-dash cleaner, which still reports exit code 1 after a successful fix.
+
 ### Format cleanup: `--format`
 Removing an emoji can leave the text irregular: a space that used to sit between a word and an emoji ends up stranded in front of the following punctuation. `--format` fixes what the cleanup itself caused:
 
