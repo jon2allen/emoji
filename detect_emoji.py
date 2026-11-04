@@ -294,6 +294,186 @@ def replace_emoji_in_text(text: str, mode: str, format_cleanup: bool = False) ->
     return apply_clusters(text, find_emoji(text), mode, format_cleanup)
 
 
+def count_words(text: str, clusters=None) -> int:
+    """Count words: tokens split on whitespace with emoji clusters removed,
+    that contain a letter or digit.
+    clusters: precomputed find_emoji output, if the caller already has it.
+    """
+    if clusters is None:
+        clusters = list(find_emoji(text))
+    if not clusters:
+        return sum(1 for token in text.split() if any(c.isalnum() for c in token))
+    out = []
+    pos = 0
+    for start, end, _cat, _cluster in clusters:
+        out.append(text[pos:start])
+        out.append(' ')
+        pos = end
+    out.append(text[pos:])
+    cleaned = ''.join(out)
+    return sum(1 for token in cleaned.split() if any(c.isalnum() for c in token))
+
+
+def emoji_density(text: str) -> dict:
+    """Emoji per 1,000 words: density = (emoji count / word count) x 1000.
+    Reports total emoji clusters, per-category counts, and per-emoji (individual
+    cluster) counts. 0.0 when there are no words.
+    """
+    clusters = list(find_emoji(text))
+    words = count_words(text, clusters)
+    categories = {}
+    individuals = {}
+    for _s, _e, category, cluster in clusters:
+        categories[category] = categories.get(category, 0) + 1
+        individuals[cluster] = individuals.get(cluster, 0) + 1
+    return {
+        'words': words,
+        'total_emoji': len(clusters),
+        'categories': categories,
+        'emoji': individuals,
+    }
+
+
+DENSITY_GROUPS = ('all', 'category', 'emoji')
+
+
+def _per_k(count: int, words: int) -> float:
+    return count * 1000 / words if words else 0.0
+
+
+def read_text(filepath: str):
+    """Return a file's (or stdin's) text, or None for symlinks, binary, or non-UTF-8 files."""
+    if filepath == STDIN_TARGET:
+        return sys.stdin.buffer.read().decode('utf-8', 'replace')
+    if os.path.islink(filepath):
+        return None
+    try:
+        with open(filepath, 'r', encoding='utf-8', newline='') as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        return None
+    return None if '\x00' in content else content
+
+
+def _print_all_table(rows, total_emoji, words):
+    width = max(len('TOTAL'), max(len(r['file']) for r in rows))
+    sep = '-' * (width + 30)
+    print(f"{'File':<{width}}  {'Words':>9}  {'Emoji':>7}  {'Emoji/1k':>8}")
+    print(sep)
+    for r in rows:
+        print(f"{r['file']:<{width}}  {r['words']:>9}  {r['total_emoji']:>7}  "
+              f"{_per_k(r['total_emoji'], r['words']):>8.2f}")
+    print(sep)
+    print(f"{'TOTAL':<{width}}  {words:>9}  {total_emoji:>7}  {_per_k(total_emoji, words):>8.2f}")
+
+
+def _print_category_table(categories, words):
+    width = 24
+    sep = '-' * (width + 18)
+    print(f"\n{'Category':<{width}}  {'Count':>7}  {'Per 1k':>7}")
+    print(sep)
+    for cat in sorted(categories, key=lambda c: (-categories[c], c)):
+        cnt = categories[cat]
+        print(f"{cat:<{width}}  {cnt:>7}  {_per_k(cnt, words):>7.2f}")
+    print(sep)
+    total = sum(categories.values())
+    print(f"{'TOTAL':<{width}}  {total:>7}  {_per_k(total, words):>7.2f}")
+
+
+def _cluster_display_width(cluster: str) -> int:
+    """Estimate terminal display width of an emoji cluster (columns).
+
+    Emoji clusters from find_emoji render as a single 2-column glyph in most
+    terminals, regardless of codepoint count (ZWJ sequences, flags, keycaps
+    all collapse to one perceived emoji). Orphan components are invisible.
+    """
+    has_visible = any(c not in CLUSTER_COMPONENTS and c != ZWJ for c in cluster)
+    return 2 if has_visible else 0
+
+
+def _pad_to_width(s: str, width: int) -> str:
+    """Pad s with trailing spaces so its terminal display width equals width."""
+    sw = _cluster_display_width(s) if s and any(
+        c not in CLUSTER_COMPONENTS and c != ZWJ for c in s
+    ) and not s.isascii() else len(s)
+    return s + ' ' * max(0, width - sw)
+
+
+def _print_emoji_table(individuals, words, top):
+    items = sorted(individuals.items(), key=lambda x: (-x[1], x[0]))
+    if top > 0:
+        items = items[:top]
+    emoji_w = max(len('Emoji'), 2)
+    cp_w = max(len('Codepoints'), max((len(_codepoints(c)) for c, _ in items), default=0))
+    sep = '-' * (emoji_w + 2 + cp_w + 2 + 7 + 2 + 7)
+    print(f"\n{'Emoji':<{emoji_w}}  {'Codepoints':<{cp_w}}  {'Count':>7}  {'Per 1k':>7}")
+    print(sep)
+    for cluster, cnt in items:
+        print(f"{_pad_to_width(cluster, emoji_w)}  {_codepoints(cluster):<{cp_w}}  {cnt:>7}  {_per_k(cnt, words):>7.2f}")
+    print(sep)
+    total = sum(individuals.values())
+    print(f"{'TOTAL':<{emoji_w + 2 + cp_w}}  {total:>7}  {_per_k(total, words):>7.2f}")
+
+
+def run_density(args, levels) -> int:
+    """--density mode: print emoji per 1,000 words."""
+    rows = []
+    any_errors = False
+    for filepath in resolve_targets(args.files, args.recursive):
+        try:
+            content = read_text(filepath)
+        except OSError as e:
+            print(f"Error processing {filepath}: {e}", file=sys.stderr)
+            any_errors = True
+            continue
+        if content is None:
+            if not args.quiet and not args.json:
+                print(f"Skipping binary / non-UTF-8 file: {filepath}", file=sys.stderr)
+            continue
+        name = '<stdin>' if filepath == STDIN_TARGET else filepath
+        rows.append({'file': name, **emoji_density(content)})
+
+    rows.sort(key=lambda r: r['file'])
+    words = sum(r['words'] for r in rows)
+    total_emoji = sum(r['total_emoji'] for r in rows)
+    agg_categories = {}
+    agg_emoji = {}
+    for r in rows:
+        for cat, cnt in r['categories'].items():
+            agg_categories[cat] = agg_categories.get(cat, 0) + cnt
+        for cl, cnt in r['emoji'].items():
+            agg_emoji[cl] = agg_emoji.get(cl, 0) + cnt
+
+    if args.json:
+        for r in rows:
+            r['total_density'] = _per_k(r['total_emoji'], r['words'])
+        total = {
+            'words': words,
+            'total_emoji': total_emoji,
+            'total_density': _per_k(total_emoji, words),
+            'categories': agg_categories,
+            'emoji': agg_emoji,
+        }
+        print(json.dumps({
+            'files': rows,
+            'total': total,
+            'group_by': sorted(levels),
+            'top': args.top,
+            'errors_encountered': any_errors,
+        }, indent=2, ensure_ascii=False))
+    elif rows:
+        if 'all' in levels:
+            _print_all_table(rows, total_emoji, words)
+        if 'category' in levels:
+            _print_category_table(agg_categories, words)
+        if 'emoji' in levels:
+            _print_emoji_table(agg_emoji, words, args.top)
+        print("Density = (emoji count / word count) x 1000")
+    elif not args.quiet:
+        print("No text files to measure.")
+    return 1 if (args.exit_code and any_errors) else 0
+
+
 def _line_starts(content: str) -> list:
     """Offsets where each line begins, in order (line i starts at starts[i])."""
     starts = [0]
@@ -632,10 +812,26 @@ def main():
     parser.add_argument('-q', '--quiet', action='store_true', help='Suppress per-file progress output')
     parser.add_argument('--exit-code', action='store_true', help='Exit with code 1 if emoji remain uncleaned (detected without --fix, or --dry-run) or if errors occur (for CI)')
     parser.add_argument('--scan-staged', action='store_true', help='(hook mode) read NUL-delimited staged paths on stdin and print the ones whose staged blob contains emoji')
+    parser.add_argument('--density', action='store_true', help='Report emoji per 1,000 words for each file instead of scanning/cleaning')
+    parser.add_argument('--group-by', default='all', help="Density breakdown: 'all' (per-file aggregate), 'category' (per emoji category), 'emoji' (per individual emoji). Comma-list allowed (default: all)")
+    parser.add_argument('--top', type=int, default=20, help='With --density --group-by emoji, show only the top N emoji (0 = all, default: 20)')
     args = parser.parse_args()
 
     if args.scan_staged:
         sys.exit(scan_staged())
+
+    if args.density:
+        if args.fix or args.dry_run:
+            parser.error('--density cannot be combined with --fix or --dry-run')
+        levels = set()
+        for g in args.group_by.split(','):
+            g = g.strip()
+            if g not in DENSITY_GROUPS:
+                parser.error(f"--group-by: invalid choice '{g}' (choose from {', '.join(DENSITY_GROUPS)})")
+            levels.add(g)
+        if not args.files and stdin_has_data():
+            args.files = [STDIN_TARGET]
+        sys.exit(run_density(args, levels))
 
     # If --dry-run is supplied without --fix, automatically imply fix inspection mode
     if args.dry_run and not args.fix:

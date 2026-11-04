@@ -409,3 +409,148 @@ def test_geometric_extended_shapes_detected_and_cleaned():
         os.remove(path)
 
 
+# --density: emoji per 1,000 words
+import json
+
+from detect_emoji import count_words, emoji_density
+
+GRIN = "\U0001F600"      # EMOTICONS
+ROCKET = "\U0001F680"    # TRANSPORT_MAP
+HEART = "\u2764"         # MISC_SYMBOLS
+
+
+def test_count_words_removes_emoji():
+    assert count_words(f"one two{GRIN}three") == 3
+    assert count_words(f"pages 10{ROCKET}20") == 3
+    # ZWJ family cluster is one unit, removed as one
+    family = "\U0001F468\u200d\U0001F469\u200d\U0001F467"
+    assert count_words(f"a{family}b") == 2
+    assert count_words("") == 0
+    assert count_words("clean text only") == 3
+
+
+def test_emoji_density_formula():
+    r = emoji_density(f"one two three{GRIN}four five six seven{ROCKET}eight")
+    assert r["words"] == 8
+    assert r["total_emoji"] == 2
+    assert r["categories"] == {"EMOTICONS": 1, "TRANSPORT_MAP": 1}
+    assert r["emoji"] == {GRIN: 1, ROCKET: 1}
+
+
+def test_emoji_density_no_words():
+    r = emoji_density(GRIN)
+    assert r["words"] == 0
+    assert r["total_emoji"] == 1
+
+
+def test_density_cli_all(tmp_path):
+    (tmp_path / "a.txt").write_text(f"one{GRIN}two three four", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("five six seven eight", encoding="utf-8")
+    res = run_emoji("--density", str(tmp_path))
+    assert res.returncode == 0, res.stderr
+    assert "Emoji/1k" in res.stdout
+    assert "TOTAL" in res.stdout
+    # a.txt: 4 words, 1 emoji -> 250.0
+    assert "250.00" in res.stdout
+
+
+def test_density_cli_json(tmp_path):
+    (tmp_path / "a.txt").write_text(f"one{GRIN}two three four", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("five six seven eight", encoding="utf-8")
+    res = run_emoji("--density", "--json", str(tmp_path))
+    assert res.returncode == 0, res.stderr
+    data = json.loads(res.stdout)
+    assert len(data["files"]) == 2
+    assert data["total"]["words"] == 8
+    assert data["total"]["total_emoji"] == 1
+    assert data["total"]["total_density"] == 125.0
+    assert data["group_by"] == ["all"]
+
+
+def test_density_group_by_category(tmp_path):
+    (tmp_path / "a.txt").write_text(
+        f"{GRIN} {GRIN} {ROCKET} {HEART} word word word word word word", encoding="utf-8")
+    res = run_emoji("--density", "--group-by", "category", str(tmp_path))
+    assert res.returncode == 0, res.stderr
+    assert "Category" in res.stdout
+    assert "EMOTICONS" in res.stdout
+    assert "TRANSPORT_MAP" in res.stdout
+    assert "DINGBATS" in res.stdout
+    assert "TOTAL" in res.stdout
+
+
+def test_density_group_by_emoji(tmp_path):
+    (tmp_path / "a.txt").write_text(
+        f"{GRIN} {GRIN} {ROCKET} word word word word word word word", encoding="utf-8")
+    res = run_emoji("--density", "--group-by", "emoji", str(tmp_path))
+    assert res.returncode == 0, res.stderr
+    assert "Codepoints" in res.stdout
+    assert GRIN in res.stdout
+    assert "U+1F600" in res.stdout
+    assert "TOTAL" in res.stdout
+    header = [l for l in res.stdout.splitlines() if "Codepoints" in l][0]
+    assert header.startswith("Emoji  Codepoints")
+    assert header.index("Codepoints") < header.index("Count") < header.index("Per 1k")
+
+
+def test_density_top_n(tmp_path):
+    text = " ".join([GRIN] * 5 + [ROCKET] * 3 + [HEART] * 1 + ["word"] * 20)
+    (tmp_path / "a.txt").write_text(text, encoding="utf-8")
+    res = run_emoji("--density", "--group-by", "emoji", "--top", "2", str(tmp_path))
+    assert res.returncode == 0, res.stderr
+    # Top 2 by count: GRIN (5) and ROCKET (3); HEART should be excluded
+    assert GRIN in res.stdout
+    assert ROCKET in res.stdout
+    # HEART appears only in the TOTAL line count, not as its own row
+    lines = [l for l in res.stdout.splitlines() if HEART in l]
+    assert len(lines) == 0
+
+
+def test_density_top_zero_shows_all(tmp_path):
+    text = " ".join([GRIN] * 2 + [ROCKET] * 1 + [HEART] * 1 + ["word"] * 10)
+    (tmp_path / "a.txt").write_text(text, encoding="utf-8")
+    res = run_emoji("--density", "--group-by", "emoji", "--top", "0", str(tmp_path))
+    assert res.returncode == 0, res.stderr
+    assert GRIN in res.stdout
+    assert ROCKET in res.stdout
+    assert HEART in res.stdout
+
+
+def test_density_group_by_combined(tmp_path):
+    (tmp_path / "a.txt").write_text(f"{GRIN} {ROCKET} word word word", encoding="utf-8")
+    res = run_emoji("--density", "--group-by", "all,category,emoji", str(tmp_path))
+    assert res.returncode == 0, res.stderr
+    assert "Emoji/1k" in res.stdout
+    assert "Category" in res.stdout
+    assert "Codepoints" in res.stdout
+
+
+def test_density_does_not_modify_files(tmp_path):
+    p = tmp_path / "a.txt"
+    p.write_text(f"x{GRIN}y", encoding="utf-8")
+    res = run_emoji("--density", str(p))
+    assert res.returncode == 0
+    assert p.read_text(encoding="utf-8") == f"x{GRIN}y"
+
+
+def test_density_rejects_fix():
+    res = run_emoji("--density", "--fix", "x.txt")
+    assert res.returncode == 2
+
+
+def test_density_rejects_invalid_group_by():
+    res = run_emoji("--density", "--group-by", "bogus", "x.txt")
+    assert res.returncode == 2
+
+
+def test_density_stdin():
+    res = subprocess.run(
+        [sys.executable, SCRIPT_PATH, "--density"],
+        input=f"one two{GRIN}three four five",
+        capture_output=True, text=True, encoding="utf-8")
+    assert res.returncode == 0
+    assert "<stdin>" in res.stdout
+    # 5 words, 1 emoji -> 200.0
+    assert "200.00" in res.stdout
+
+

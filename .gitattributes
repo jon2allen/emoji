@@ -2,6 +2,10 @@
 detect_emoji.py -emoji
 test_emoji.py -emoji
 test_hook.py -emoji
+# Generation script holds literal emoji in its pool
+generate_testbed.py -emoji
+# Testbed samples hold emoji that must survive the cleaner
+testbed/** -emoji
 # Test fixtures also hold dash variants that must survive the em-dash cleaner
 test_emoji.py -emdash
 test_hook.py -emdash

@@ -36,11 +36,14 @@ README.md -emoji
 ---
 
 ## Directory Contents
-- **`detect_emoji.py`**: Standalone Python 3 scanner and cleaner (supports `-r`, `--fix`, `--mode strip|space|map`, `--format`, `--dry-run`, `--backup`, `--json`, `--exit-code`, and `-q`; requires Python 3.7+).
+- **`detect_emoji.py`**: Standalone Python 3 scanner and cleaner (supports `-r`, `--fix`, `--mode strip|space|map`, `--format`, `--dry-run`, `--backup`, `--json`, `--exit-code`, `--density`, `--group-by`, `--top`, and `-q`; requires Python 3.7+).
 - **`pre-commit`**: POSIX `/bin/sh` hook script placed in `~/.git_hooks/`.
 - **`setup.sh`**: Setup installer for macOS and Linux (`sh`/`bash`/`zsh`).
 - **`setup.csh`**: Setup installer for FreeBSD and `csh`/`tcsh` shells.
 - **`test_emoji.py`**, **`test_hook.py`**: Test suite (`python3 -m pytest`).
+- **`generate_testbed.py`**: Injects emoji into a source text at a target density for testing the metric.
+- **`emoji_analysis.sh`**: Runner script that executes unit tests and generates the density analysis table across the testbed.
+- **`testbed/`**: Synthetic emoji-laden texts at controlled densities (generated from `cat_story.txt` with emoji stripped).
 
 ---
 
@@ -123,6 +126,101 @@ With `--fix`, the cleaned text goes to stdout and reports go to stderr.
 3. Applies universally to all current and future Git repositories on the system without needing per-repository configuration.
 
 The hook hands the NUL-delimited list of staged paths to `detect_emoji.py --scan-staged`, which filters exempt paths (`git check-attr`) and reads every staged blob (`git cat-file --batch`) in one batched pass: a 50-file commit pays one Python startup instead of fifty. The staged path list is NUL-delimited end to end, so filenames containing newlines are detected; only the rare fixing loop falls back to newline splitting, and a path it cannot round-trip is rejected rather than silently committed. Requires Git 2.20+ for the batched object protocol.
+
+---
+
+## Emoji Density
+`detect_emoji.py --density` reports, for each file, how many emoji appear per 1,000 words:
+
+```
+density = (emoji count / word count) x 1000
+```
+
+The counting unit is the **cluster**: a ZWJ family sequence, a flag, or a keycap each count as one, matching the detector's perception of a single emoji. A word is any token, split on whitespace with emoji clusters removed, that contains a letter or digit. Every file is measured the same way, and nothing is modified (`--density` cannot be combined with `--fix`).
+
+### Breakdown levels: `--group-by`
+
+| Level | What it shows | Flag |
+|-------|--------------|------|
+| `all` | Per-file aggregate: total emoji per 1,000 words | `--group-by all` (default) |
+| `category` | Per emoji category (EMOTICONS, DINGBATS, TRANSPORT_MAP, etc.) | `--group-by category` |
+| `emoji` | Per individual emoji cluster, capped by `--top N` | `--group-by emoji --top 15` |
+
+Levels can be combined: `--group-by all,category,emoji` prints all three tables. The `--top` option (default 20, `0` for all) limits the per-emoji table to the most frequent clusters.
+
+```bash
+detect_emoji.py --density docs/
+detect_emoji.py --density --group-by category -r docs/
+detect_emoji.py --density --group-by emoji --top 15 docs/
+cat draft.md | detect_emoji.py --density --json
+```
+
+### Synthetic Testbed
+
+No public domain novels contain emoji (they predate Unicode emoji by decades), and the only natural emoji-bearing corpora are tweets and social media (short-form). To test the metric on longer prose with known ground truth, `generate_testbed.py` injects emoji into a source text at a target density. Inject N emoji into W words, and `--density` should report N/W x 1000.
+
+The testbed is built from `cat_story.txt` (a short story already in the repo) with emoji stripped, then re-injected at controlled densities:
+
+```bash
+./detect_emoji.py --fix - < cat_story.txt > testbed/baseline.txt
+./generate_testbed.py testbed/baseline.txt --density 5  > testbed/low_density.txt
+./generate_testbed.py testbed/baseline.txt --density 20 > testbed/medium_density.txt
+./generate_testbed.py testbed/baseline.txt --density 50 > testbed/high_density.txt
+./generate_testbed.py testbed/baseline.txt --density 30 --category emoticons > testbed/emoticons_only.txt
+```
+
+Running `./detect_emoji.py --density --group-by all,category testbed/*.txt cat_story.txt` produces:
+
+```
+File                            Words    Emoji  Emoji/1k
+--------------------------------------------------------
+cat_story.txt                     262       57    217.56
+testbed/baseline.txt              262        0      0.00
+testbed/emoticons_only.txt        262        8     30.53
+testbed/high_density.txt          262       13     49.62
+testbed/low_density.txt           262        1      3.82
+testbed/medium_density.txt        262        5     19.08
+--------------------------------------------------------
+TOTAL                            1572       84     53.44
+
+Category                    Count   Per 1k
+------------------------------------------
+EMOJI_PICTOGRAPHS              47    29.90
+EMOTICONS                     10     6.36
+SUPPLEMENTAL                   8     5.09
+TRANSPORT_MAP                  6     3.82
+DINGBATS                       4     2.54
+MISC_SYMBOLS                   3     1.91
+EXTENDED_A                     2     1.27
+KEYCAP                         2     1.27
+MISC_SYMBOLS_ARROWS            2     1.27
+------------------------------------------
+TOTAL                         84    53.44
+Density = (emoji count / word count) x 1000
+```
+
+The injected densities track the targets (low 3.82 vs 5, medium 19.08 vs 20, high 49.62 vs 50), with small rounding error from the word count denominator. The `emoticons_only` sample confirms `--group-by category` isolates a single category. `cat_story.txt` (the original, hand-written story) shows what naturalistic high-density emoji prose looks like at 217.56 per 1,000 words.
+
+The per-emoji view (`--group-by emoji --top 15`) shows the most frequent individual clusters, including multi-codepoint sequences:
+
+```
+Emoji  Codepoints              Count   Per 1k
+---------------------------------------------
+🐾     U+1F43E                     3     5.73
+🚪     U+1F6AA                     3     5.73
+🌿     U+1F33F                     2     3.82
+🐱     U+1F431                     2     3.82
+🔥     U+1F525                     2     3.82
+1️⃣     U+0031+U+FE0F+U+20E3        1     1.91
+☀️     U+2600+U+FE0F               1     1.91
+☕️     U+2615+U+FE0F               1     1.91
+⚡️     U+26A1+U+FE0F               1     1.91
+✅     U+2705                      1     1.91
+---------------------------------------------
+TOTAL                             70   133.59
+```
+
+Run `./emoji_analysis.sh` to regenerate the testbed and produce the full report.
 
 ---
 
