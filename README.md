@@ -275,3 +275,29 @@ git config core.hooksPath .git/hooks
 ```
 
 This sets repository-local config to point back to `.git/hooks`, overriding the global `core.hooksPath` for that repo only.
+
+---
+
+## References
+
+The density calculation — `(emoji count / word count) x 1000` — follows the per-1,000-words frequency metric introduced for em dashes in:
+
+- Freeburg, E. M. (2026). *The Last Fingerprint: How Markdown Training Shapes LLM Prose*. [arXiv:2603.27006](https://arxiv.org/abs/2603.27006) — research code: [emfreeburg/the-last-fingerprint](https://github.com/emfreeburg/the-last-fingerprint). The em dash density tool that inspired this one lives in the [emdash](https://github.com/jon2allen/emdash) repository.
+
+No published paper measures emoji density per 1,000 words across LLM-generated prose the way Freeburg measures em dash density. The following papers and analyses study emoji generation, LLM stylistic fingerprints, and AI-text detection, and collectively motivate extending the density metric to emoji:
+
+1. Jain, N., Wu, Z., Munoz, C., Hilliard, A., Guan, X., Treleaven, P., Kazim, E., & Koshiyama, A. (2025). *From Text to Emoji: How PEFT-Driven Personality Manipulation Unleashes the Emoji Potential in LLMs*. Findings of NAACL 2025. [arXiv:2409.10245](https://arxiv.org/abs/2409.10245) — after personality fine-tuning, LLaMA-2 and Mistral spontaneously generated emoji despite no emoji in the training data; traced to specific neurons.
+
+2. Michael, D. & Kenneth, H. *How Good Is GPT's "Emojinal Intelligence"? Investigating Emoji Patterns in LLM-Generated Social Media Text*. Proceedings of the International Conference on AI Research (ICAIR). [Paper](https://papers.academic-conferences.org/index.php/icair/article/view/3225) — compares GPT-3.5 emoji patterns against human tweets; finds LLMs use broader emoji variety with literal subject representation, while humans prefer faces, hearts, and repetition.
+
+3. *Emoji as interpersonal resources in LLM chatbot conversations: a social semiotic analysis of tenor and affiliation in human–AI interaction* (2025). [Taylor & Francis](https://www.tandfonline.com/doi/full/10.1080/10350330.2025.2570317) — analyzes emoji use across one million chatbot–human interactions as resources for shaping interpersonal tone.
+
+4. Peng, L. et al. (2023). *EmojiLM: Modeling the New Emoji Language*. [arXiv:2311.01751](https://arxiv.org/abs/2311.01751) — synthesizes a text-emoji parallel corpus from an LLM and treats emoji as an emerging linguistic system.
+
+5. *Detecting Stylistic Fingerprints of Large Language Models* (2025). [arXiv:2503.01659](https://arxiv.org/html/2503.01659v1) — classifies texts by LLM family (Claude, Gemini, Llama, OpenAI) using stylistic fingerprints that persist across domains and writing styles.
+
+6. Netcraft. *Excessive Emojis as an AI Indicator*. [netcraft.com/blog/excessive-emojis-as-an-ai-indicator](https://www.netcraft.com/blog/excessive-emojis-as-an-ai-indicator) — industry analysis identifying emoji in code comments and console outputs as a consistent machine-generated footprint.
+
+7. Pangram. *9 Signs of AI Writing, Backed by Data*. [pangram.com/signs-of-ai-writing](https://www.pangram.com/signs-of-ai-writing) — detector vendor analysis noting that aggregate emoji use is barely elevated in AI text, but which specific emojis are used differs significantly from human text.
+
+8. *Markers of AI-generated text: the measurable signs*. ScriptGrain. [scriptgrain.com/reference/markers-of-ai-writing](https://scriptgrain.com/reference/markers-of-ai-writing) — survey of measurable frequency shifts (em dashes, vocabulary, punctuation) that distinguish AI-generated text, with discussion of false-positive rates.
