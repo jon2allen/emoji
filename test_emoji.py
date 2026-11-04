@@ -393,3 +393,19 @@ def test_unicode_escape_formatting_smp():
     cats = detect_emoji.categorize_emoji(EMOJI)
     assert cats["EMOTICONS"]["unicode_escape"] == "\\U0001f600"
 
+
+def test_geometric_extended_shapes_detected_and_cleaned():
+    # Colored circles and squares: U+1F7E0 - U+1F7EB
+    text = "Status: \U0001F7E1 in progress \U0001F7E2 done \U0001F7E5 blocker\n"
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt", encoding="utf-8") as f:
+        f.write(text)
+        path = f.name
+    try:
+        res = run_emoji("--fix", path)
+        assert res.returncode == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "Status: in progress done blocker\n"
+    finally:
+        os.remove(path)
+
+
