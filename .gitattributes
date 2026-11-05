@@ -6,6 +6,8 @@ test_hook.py -emoji
 generate_testbed.py -emoji
 # Testbed samples hold emoji that must survive the cleaner
 testbed/** -emoji
+# Documentation example holds literal emoji
+simple_explain.md -emoji
 # Test fixtures also hold dash variants that must survive the em-dash cleaner
 test_emoji.py -emdash
 test_hook.py -emdash
