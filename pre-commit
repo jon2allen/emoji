@@ -20,10 +20,14 @@ run_chained_hook() {
 
 # 1. Chain to the repository-local hook if present (.git/hooks/pre-commit)
 # This ensures Husky, lint-staged, or secret scanners are NOT bypassed.
+# Guard with an environment variable so chained sibling hooks do not re-run it.
 # --git-path would follow core.hooksPath back to this hook, so build the path by hand.
-COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")
-LOCAL_HOOK="$COMMON_DIR/hooks/pre-commit"
-run_chained_hook "$LOCAL_HOOK" "$@"
+if [ -z "${GIT_LOCAL_HOOK_RAN:-}" ]; then
+    export GIT_LOCAL_HOOK_RAN=1
+    COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")
+    LOCAL_HOOK="$COMMON_DIR/hooks/pre-commit"
+    run_chained_hook "$LOCAL_HOOK" "$@"
+fi
 
 # 2. Chain to sibling hooks sharing this global hooks directory, so the em-dash
 # cleaner (preserved as pre-commit-emdash) and any other saved hook still run.

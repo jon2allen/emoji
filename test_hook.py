@@ -234,6 +234,39 @@ def test_sibling_hook_runs_then_scan_still_fixes(env, tmp_path):
     assert head(git, 'f') == b'ab\n'
 
 
+def test_local_hook_executes_only_once_with_siblings(env, tmp_path):
+    e, hooks = env
+    # Sibling hook that also respects GIT_LOCAL_HOOK_RAN
+    sib = os.path.join(hooks, 'pre-commit-emdash')
+    with open(sib, 'w') as f:
+        f.write('#!/bin/sh\n'
+                'if [ -z "${GIT_LOCAL_HOOK_RAN:-}" ]; then\n'
+                '    export GIT_LOCAL_HOOK_RAN=1\n'
+                '    COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")\n'
+                '    LOCAL_HOOK="$COMMON_DIR/hooks/pre-commit"\n'
+                '    [ -x "$LOCAL_HOOK" ] && "$LOCAL_HOOK" "$@"\n'
+                'fi\n')
+    os.chmod(sib, 0o755)
+    r = tmp_path / 'r'
+    r.mkdir()
+    def git(*args, check=True):
+        return subprocess.run(['git', *args], cwd=r, env=e, check=check,
+                              capture_output=True, text=True)
+    git('config', '--global', 'core.hooksPath', hooks)
+    git('config', '--global', 'user.name', 't')
+    git('config', '--global', 'user.email', 't@example.test')
+    git('init', '-q')
+    local = r / '.git' / 'hooks' / 'pre-commit'
+    counter = r / 'counter.txt'
+    local.write_text(f'#!/bin/sh\necho "ran" >> "{counter}"\n')
+    local.chmod(0o755)
+    (r / 'f').write_text('clean text\n')
+    git('add', 'f')
+    git('commit', '-qm', 'c')
+    # Local hook should have executed exactly once
+    assert counter.read_text().strip().splitlines() == ['ran']
+
+
 def run_cli(tmp_path, *args):
     return subprocess.run([sys.executable, os.path.join(SRC, 'detect_emoji.py'), *args],
                           cwd=tmp_path, capture_output=True, text=True)
