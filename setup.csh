@@ -133,27 +133,57 @@ if ( $INSTALL_HOOK == 1 ) then
         mkdir -p "$HOOKS_DIR"
     endif
 
+    set BOTH_INSTALLED = 0
+    if ( -f "$HOOKS_DIR/detect_emdash.py" ) then
+        set BOTH_INSTALLED = 1
+    endif
+
+    if ( -f "$HOOKS_DIR/detect_emoji.py" ) then
+        cmp -s "$SCRIPT_DIR/detect_emoji.py" "$HOOKS_DIR/detect_emoji.py"
+        if ( $status == 0 ) then
+            echo "      NOTE: detect_emoji.py in $HOOKS_DIR is already up to date (identical file)."
+        else
+            set OLD_SIZE = `wc -c < "$HOOKS_DIR/detect_emoji.py" | tr -d ' '`
+            set NEW_SIZE = `wc -c < "$SCRIPT_DIR/detect_emoji.py" | tr -d ' '`
+            echo "      NOTE: Updating existing detect_emoji.py in $HOOKS_DIR ($OLD_SIZE bytes -> $NEW_SIZE bytes)."
+        endif
+    endif
+
+    if ( -f "$HOOKS_DIR/pre-commit-emoji" ) then
+        rm -f "$HOOKS_DIR/pre-commit-emoji"
+        echo "      NOTE: Removed redundant pre-commit-emoji sibling to prevent hook loops."
+    endif
+
     # Preserve a different hook already occupying the pre-commit slot (for
     # example the em-dash cleaner). The new hook chains to pre-commit-emdash /
     # pre-commit-legacy siblings, so preserved hooks keep running.
     if ( -f "$HOOKS_DIR/pre-commit" ) then
         cmp -s "$HOOKS_DIR/pre-commit" "$SCRIPT_DIR/pre-commit"
         if ( $status != 0 ) then
-            set PRESERVE_AS = "$HOOKS_DIR/pre-commit-legacy"
-            grep -q "detect_emdash" "$HOOKS_DIR/pre-commit"
+            grep -q "detect_emoji" "$HOOKS_DIR/pre-commit"
             if ( $status == 0 ) then
-                set PRESERVE_AS = "$HOOKS_DIR/pre-commit-emdash"
+                echo "      NOTE: Updating existing emoji pre-commit hook in place."
+            else
+                grep -q "detect_emdash" "$HOOKS_DIR/pre-commit"
+                if ( $status == 0 ) then
+                    set BOTH_INSTALLED = 1
+                    set PRESERVE_AS = "$HOOKS_DIR/pre-commit-emdash"
+                    mv "$HOOKS_DIR/pre-commit" "$PRESERVE_AS"
+                    echo "      NOTE: Existing emdash pre-commit hook preserved as pre-commit-emdash (chained automatically)."
+                else
+                    set PRESERVE_AS = "$HOOKS_DIR/pre-commit-legacy"
+                    # Never overwrite a previously preserved unknown hook: bump the numeric suffix
+                    if ( -f "$PRESERVE_AS" ) then
+                        @ N = 1
+                        while ( -f "$PRESERVE_AS.$N" )
+                            @ N = $N + 1
+                        end
+                        set PRESERVE_AS = "$PRESERVE_AS.$N"
+                    endif
+                    mv "$HOOKS_DIR/pre-commit" "$PRESERVE_AS"
+                    echo "      NOTE: Existing pre-commit hook preserved as `basename $PRESERVE_AS` (chained automatically)."
+                endif
             endif
-            # Never overwrite a previously preserved hook: bump the numeric suffix
-            if ( -f "$PRESERVE_AS" ) then
-                @ N = 1
-                while ( -f "$PRESERVE_AS.$N" )
-                    @ N = $N + 1
-                end
-                set PRESERVE_AS = "$PRESERVE_AS.$N"
-            endif
-            mv "$HOOKS_DIR/pre-commit" "$PRESERVE_AS"
-            echo "      NOTE: existing pre-commit hook preserved as `basename $PRESERVE_AS` (chained automatically)."
         endif
     endif
 
@@ -166,6 +196,14 @@ if ( $INSTALL_HOOK == 1 ) then
     set CURRENT_PATH = `git config --global core.hooksPath`
     echo "      -> Installed: $HOOKS_DIR/pre-commit"
     echo "      -> Configured git core.hooksPath = $CURRENT_PATH"
+
+    if ( $BOTH_INSTALLED == 1 ) then
+        echo ""
+        echo "      WARNING: Both detect_emoji.py and detect_emdash.py are installed in $HOOKS_DIR."
+        echo "               They are chained to run together. If you ever encounter hook issues,"
+        echo "               delete $HOOKS_DIR and re-run setup.csh to start fresh:"
+        echo "                   rm -rf $HOOKS_DIR && ./setup.csh"
+    endif
 endif
 
 echo "--------------------------------------------------------"

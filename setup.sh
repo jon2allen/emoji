@@ -127,25 +127,53 @@ if [ "$INSTALL_HOOK" -eq 1 ]; then
 
     mkdir -p "$HOOKS_DIR"
 
+    # Check if both emoji and emdash are already present in ~/.git_hooks
+    BOTH_INSTALLED=0
+    if [ -f "$HOOKS_DIR/detect_emdash.py" ]; then
+        BOTH_INSTALLED=1
+    fi
+
+    # Check if this exact version of detect_emoji.py is already installed
+    if [ -f "$HOOKS_DIR/detect_emoji.py" ]; then
+        if cmp -s "$SCRIPT_DIR/detect_emoji.py" "$HOOKS_DIR/detect_emoji.py"; then
+            echo "      NOTE: detect_emoji.py in $HOOKS_DIR is already up to date (identical file)."
+        else
+            OLD_SIZE=$(wc -c < "$HOOKS_DIR/detect_emoji.py" | tr -d ' ')
+            NEW_SIZE=$(wc -c < "$SCRIPT_DIR/detect_emoji.py" | tr -d ' ')
+            echo "      NOTE: Updating existing detect_emoji.py in $HOOKS_DIR ($OLD_SIZE bytes -> $NEW_SIZE bytes)."
+        fi
+    fi
+
+    # Remove any stale pre-commit-emoji sibling so emoji and emdash never chain in a loop
+    if [ -f "$HOOKS_DIR/pre-commit-emoji" ]; then
+        rm -f "$HOOKS_DIR/pre-commit-emoji"
+        echo "      NOTE: Removed redundant pre-commit-emoji sibling to prevent hook loops."
+    fi
+
     # Preserve a different hook already occupying the pre-commit slot (for
     # example the em-dash cleaner). The new hook chains to pre-commit-emdash /
     # pre-commit-legacy siblings, so preserved hooks keep running.
     if [ -f "$HOOKS_DIR/pre-commit" ] && ! cmp -s "$HOOKS_DIR/pre-commit" "$SCRIPT_DIR/pre-commit"; then
-        if grep -q "detect_emdash" "$HOOKS_DIR/pre-commit" 2>/dev/null; then
+        if grep -q "detect_emoji" "$HOOKS_DIR/pre-commit" 2>/dev/null; then
+            echo "      NOTE: Updating existing emoji pre-commit hook in place."
+        elif grep -q "detect_emdash" "$HOOKS_DIR/pre-commit" 2>/dev/null; then
+            BOTH_INSTALLED=1
             PRESERVE_AS="$HOOKS_DIR/pre-commit-emdash"
+            mv "$HOOKS_DIR/pre-commit" "$PRESERVE_AS"
+            echo "      NOTE: Existing emdash pre-commit hook preserved as pre-commit-emdash (chained automatically)."
         else
             PRESERVE_AS="$HOOKS_DIR/pre-commit-legacy"
+            # Never overwrite a previously preserved unknown hook: bump the numeric suffix
+            if [ -f "$PRESERVE_AS" ]; then
+                N=1
+                while [ -f "$PRESERVE_AS.$N" ]; do
+                    N=$((N + 1))
+                done
+                PRESERVE_AS="$PRESERVE_AS.$N"
+            fi
+            mv "$HOOKS_DIR/pre-commit" "$PRESERVE_AS"
+            echo "      NOTE: Existing pre-commit hook preserved as $(basename "$PRESERVE_AS") (chained automatically)."
         fi
-        # Never overwrite a previously preserved hook: bump the numeric suffix
-        if [ -f "$PRESERVE_AS" ]; then
-            N=1
-            while [ -f "$PRESERVE_AS.$N" ]; do
-                N=$((N + 1))
-            done
-            PRESERVE_AS="$PRESERVE_AS.$N"
-        fi
-        mv "$HOOKS_DIR/pre-commit" "$PRESERVE_AS"
-        echo "      NOTE: existing pre-commit hook preserved as $(basename "$PRESERVE_AS") (chained automatically)."
     fi
 
     cp "$SCRIPT_DIR/detect_emoji.py" "$HOOKS_DIR/detect_emoji.py"
@@ -156,6 +184,14 @@ if [ "$INSTALL_HOOK" -eq 1 ]; then
     git config --global core.hooksPath "$HOOKS_DIR"
     echo "      -> Installed: $HOOKS_DIR/pre-commit"
     echo "      -> Configured git core.hooksPath = $(git config --global core.hooksPath)"
+
+    if [ "$BOTH_INSTALLED" -eq 1 ]; then
+        echo ""
+        echo "      WARNING: Both detect_emoji.py and detect_emdash.py are installed in $HOOKS_DIR."
+        echo "               They are chained to run together. If you ever encounter hook issues,"
+        echo "               delete $HOOKS_DIR and re-run setup.sh to start fresh:"
+        echo "                   rm -rf $HOOKS_DIR && ./setup.sh"
+    fi
 fi
 
 echo "--------------------------------------------------------"
